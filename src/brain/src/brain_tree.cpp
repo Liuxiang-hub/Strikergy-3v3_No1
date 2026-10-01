@@ -1492,6 +1492,15 @@ NodeStatus CalcKickDir::tick()
             -fd.length / 2.0, 0.0, bPos.x, bPos.y, shootDir);
     }
 
+    constexpr double kGoalpostInset = 0.5;
+    const double halfGoalWidth = fd.goalWidth / 2.0;
+    const double absBallY = fabs(bPos.y);
+    const bool ballInsideInsetGoalposts =
+        absBallY <= std::max(0.0, halfGoalWidth - kGoalpostInset);
+    if (ballInsideInsetGoalposts) {
+        nextKickDir = 0.0;
+    }
+
     brain->data->kickType = nextKickType;
     brain->data->kickDir = kick_geometry::normalizeAngle(nextKickDir);
 
