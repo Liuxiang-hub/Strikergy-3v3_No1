@@ -1,7 +1,7 @@
 brain_node:
   ros__parameters:
     game:
-      team_id: 70 # consistant with GameControl
+      team_id: 156 # consistant with GameControl
       player_id: 1 # 1 | 2 | 3
       field_type: "adult_size" # adult_size | kid_size | robo_league
       player_role: "striker" # striker | supporter | keeper
@@ -193,7 +193,7 @@ brain_node:
         field_ascii_char_aspect: 2.0 # 终端字符高宽比修正
         field_ascii_width: 45 # ASCII 场地图内部宽度
     
-    game_control_ip: "172.169.80.24"  # 更改为具体的裁判机的 IP 地址
+    game_control_ip: "172.20.10.2"  # 更改为具体的裁判机的 IP 地址
 
     # for fun
     sound:

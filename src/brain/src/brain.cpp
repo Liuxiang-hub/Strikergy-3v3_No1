@@ -560,7 +560,7 @@ void Brain::pubKickMsg() {
     } else if (dist > 6.0) {
         power = 3.0;
     } else {
-        power = 6.0;
+        power = 2.5;
     }
     kickMsg.power = power;
 

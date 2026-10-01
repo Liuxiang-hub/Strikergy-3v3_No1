@@ -43,7 +43,7 @@ bool BoardDetector::DetectBoard(const cv::Mat &img) {
     board_uvs_.clear();
     cv::cvtColor(img, gray_, cv::COLOR_BGR2GRAY);
     // bool found = cv::findChessboardCorners(gray_, board_size_, board_uvs_, cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_FAST_CHECK);
-    bool found = cv::findChessboardCorners(gray_, board_size_, board_uvs_, cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE);
+    bool found = cv::findChessboardCorners(gray_, board_size_, board_uvs_, cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_FAST_CHECK);
     return found;
 }
 

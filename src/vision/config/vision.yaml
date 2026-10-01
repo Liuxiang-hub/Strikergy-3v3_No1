@@ -3,29 +3,29 @@ camera:
   camera_info_topic: /boostercamera/head/rgb/camera_info
   intrin_wait_timeout_sec: 3.0
   intrin:
-    fx: 642.414673
-    fy: 641.951172
-    cx: 639.024414
-    cy: 353.080536
+    fx: 202.572113
+    fy: 202.572113
+    cx: 262.075775
+    cy: 213.058319
     distortion_model: 0
     distortion_coeffs:
       []
   extrin:
     -
-      - 0.0151383793
-      - -0.284051657
-      - 0.958689511
-      - -0.0115088783
+      - 0.00952674448
+      - -0.00697467243
+      - 0.999930263
+      - 0.00510478579
     -
-      - -0.999885082
-      - -0.00493983133
-      - 0.0143252602
-      - -0.0149254892
+      - -0.999953747
+      - 0.00125687942
+      - 0.0095357364
+      - 0.0311067309
     -
-      - 0.000666650303
-      - -0.958796263
-      - -0.284093797
-      - -0.0214525741
+      - -0.00132330053
+      - -0.999974847
+      - -0.00696237665
+      - -0.0219331048
     -
       - 0
       - 0
@@ -58,15 +58,7 @@ segmentation_model:
 use_depth: false
 ball_pose_estimator:
   use_depth: false
-  # Supported sizes: 3 (0.090 m), 4 (0.095 m), 5 (0.105 m).
   ball_size: 3
-  # Ball-only additive offsets in the robot base frame, unit: metre (m).
-  # ROS base axes: +x is forward, +y is left; negative values shift backward/right.
-  # Applied after ball-center ranging:
-  #   output_x = measured_x + x_compensation
-  #   output_y = measured_y + y_compensation
-  # Example: x_compensation: 0.05 adds 5 cm forward;
-  #          y_compensation: -0.02 adds 2 cm to the right.
   x_compensation: 0.06
   y_compensation: -0.06
   down_sample_leaf_size: 0.01
@@ -90,7 +82,7 @@ calibration:
     zero_translation: true
     field_marker_path: ./src/vision/config/field.yaml
   handeye:
-    calibration_time: 2026-04-11-09-47-23
-    reprojection_error: 2.5350552245663476
+    calibration_time: 2026-09-24-13-32-25
+    reprojection_error: 2.09748845948176
 misc:
   save_data_nonstationary: true

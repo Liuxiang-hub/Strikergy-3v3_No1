@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -176,7 +177,9 @@ void CalibrationNode::Init(const std::string cfg_path, bool is_offline, std::str
     }
 
     it_ = std::make_shared<image_transport::ImageTransport>(shared_from_this());
-    color_sub_ = it_->subscribe(color_topic, 2, &CalibrationNode::ColorCallback, this, nullptr, sub_opt_1);
+    auto color_qos = rmw_qos_profile_sensor_data;
+    color_qos.depth = 1;
+    color_sub_ = it_->subscribe(color_topic, color_qos, &CalibrationNode::ColorCallback, this, nullptr, sub_opt_1);
     pose_sub_ = this->create_subscription<geometry_msgs::msg::Pose>(
         "/head_pose", 10,
         std::bind(&CalibrationNode::PoseCallback, this, std::placeholders::_1), sub_opt_2);
@@ -703,6 +706,12 @@ void CalibrationNode::RunOfflineCalibrationProcess() {
 }
 
 void CalibrationNode::ColorCallback(const sensor_msgs::msg::Image::ConstSharedPtr &msg) {
+    static auto last_processed = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_processed < std::chrono::milliseconds(100)) {
+        return;
+    }
+    last_processed = now;
     // std::cout << "new color received" << std::endl;
     if (!msg) {
         std::cerr << "empty image message." << std::endl;
