@@ -1651,6 +1651,12 @@ NodeStatus StrikerDecide::tick() {
     double kickValue = brain->kickValue(dir_rb_f);
     double threatLevel = brain->threatLevel();
     log(format("kickValue: %.1f, threatLevel: %.1f", kickValue, threatLevel));
+
+    const auto &fieldDimensions = brain->config->fieldDimensions;
+    const bool ballInOpponentPenaltyArea =
+        ball.posToField.x >= fieldDimensions.length / 2.0 - fieldDimensions.penaltyAreaLength &&
+        ball.posToField.x <= fieldDimensions.length / 2.0 &&
+        fabs(ball.posToField.y) <= fieldDimensions.penaltyAreaWidth / 2.0;
      
 
     string newDecision;
@@ -1658,6 +1664,7 @@ NodeStatus StrikerDecide::tick() {
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
         !brain->tree->getEntry<bool>("ball_out") &&
+        !ballInOpponentPenaltyArea &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
@@ -1684,6 +1691,7 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
+        !ballInOpponentPenaltyArea &&
         !powerShootPossible &&
         brain->data->tmMyCost < 7.0 &&
         ballRange < autoVisualKickEnableDistMax &&
