@@ -50,7 +50,8 @@
                         <ReactiveSequence _while="gc_game_state=='READY'" name="走到场内自己的起始位置">
                             <PrintMsg msg="走到场内自己的起始位置"/>
                             <CamScanField />
-                        <MoveToPoseOnField x="-2.0" _while="player_role == 'striker' || player_role == 'supporter'" vtheta_limit="2.0"  vx_limit="1.2" />
+                        <MoveToPoseOnField x="-2.0" y="0.0" _while="player_role == 'striker'" vtheta_limit="2.0" vx_limit="1.2" />
+                        <MoveToPoseOnField x="-2.0" y="-2.0" _while="player_role == 'supporter'" vtheta_limit="2.0" vx_limit="1.2" />
                         <MoveToPoseOnField x="-5.5" _while="player_role == 'keeper'" vtheta_limit="2.0"  vx_limit="1.2" />
                             <SelfLocate mode="trust_direction" />
                             <WaveHand _while="we_just_scored" action="start" />
