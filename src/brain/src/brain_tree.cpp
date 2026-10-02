@@ -149,6 +149,98 @@ bool kickoffBallInOpponentHalf(Brain *brain, bool ballKnown)
     }
     return brain->tree->getEntry<bool>("gc_is_kickoff_side");
 }
+
+bool canEnterVisualKick(Brain *brain)
+{
+    auto logReject = [&](string reason)
+    {
+        brain->log->setTimeNow();
+        brain->log->log(
+            "debug/visual_kick_gate",
+            rerun::TextLog(
+                format(
+                    "reject visual kick: %s | id=%d cost=%.2f rank=%d lead=%d",
+                    reason.c_str(),
+                    brain->config->playerId,
+                    brain->data->tmMyCost,
+                    brain->data->tmMyCostRank,
+                    brain->data->tmImLead
+                )
+            )
+        );
+    };
+
+
+    bool enable = false;
+    brain->get_parameter(
+        "strategy.enable_auto_visual_kick",
+        enable);
+
+    if (!enable)
+    {
+        logReject("disabled");
+        return false;
+    }
+
+
+    if (brain->tree->getEntry<string>("gc_game_state") != "PLAY")
+    {
+        logReject("not PLAY");
+        return false;
+    }
+
+
+    if (!brain->data->tmImLead)
+    {
+        logReject("not leader");
+        return false;
+    }
+
+
+    if (brain->data->tmMyCostRank != 0)
+    {
+        logReject("cost rank not 0");
+        return false;
+    }
+
+
+    const int selfIdx =
+        brain->config->playerId - 1;
+
+    for (int i = 0;
+         i < HL_MAX_NUM_PLAYERS;
+         i++)
+    {
+        if (i == selfIdx)
+            continue;
+
+        const auto &tm =
+            brain->data->tmStatus[i];
+
+        if (tm.isAlive &&
+            tm.isInVisualKick)
+        {
+            logReject(
+                format(
+                    "teammate %d visual kicking",
+                    i+1
+                )
+            );
+            return false;
+        }
+    }
+
+
+    if (brain->tree->getEntry<bool>("ball_out"))
+    {
+        logReject("ball out");
+        return false;
+    }
+
+
+    return true;
+}
+
 } // namespace
 
 /**
@@ -1661,13 +1753,20 @@ NodeStatus StrikerDecide::tick() {
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
-    if (nearBallVisualKick)
+    if (
+        nearBallVisualKick &&
+        canEnterAutoVisualKick(brain)
+    )
     {
-        // 近球是本机的即时优先级，不再受 lead、cost rank 或开球待命分组限制。
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
         color = 0xFF00FFFF;
-        log(format("near-ball visual kick: range=%.2f", ballRange));
+
+        log(format(
+            "near-ball visual kick accepted: range=%.2f cost=%.2f rank=%d",
+            ballRange,
+            brain->data->tmMyCost,
+            brain->data->tmMyCostRank));
     }
     else if (kickoffHold)
     {
@@ -1679,11 +1778,7 @@ NodeStatus StrikerDecide::tick() {
             kickoffRank, ballInOpponentHalf ? "opponent" : "own"));
     }
     else if (
-        enableAutoVisualKick &&
-        brain->data->tmImLead &&
-        brain->data->tmMyCostRank == 0 &&
-        !brain->tree->getEntry<bool>("ball_out") &&
-        !brain->data->lose_ball &&
+        canEnterVisualKick(brain) &&
         !powerShootPossible &&
         brain->data->tmMyCost < 7.0 &&
         ballRange < autoVisualKickEnableDistMax &&
@@ -1697,8 +1792,14 @@ NodeStatus StrikerDecide::tick() {
     ) {
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
-        color = 0xFF00FFFF;
-    } else if (!brain->data->tmImLead && !kickoffAttack) {
+
+        log(format(
+            "normal visual kick accepted: range=%.2f cost=%.2f rank=%d",
+            ballRange,
+            brain->data->tmMyCost,
+            brain->data->tmMyCostRank
+        ));
+    }else if (!brain->data->tmImLead && !kickoffAttack) {
         newDecision = "assist";
         color = 0x00FFFFFF;
     }
