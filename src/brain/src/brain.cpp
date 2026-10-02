@@ -193,7 +193,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.set_play_stand.corridor_forward_range", 3.0);
     declare_parameter<double>("strategy.set_play_stand.side_margin", 0.2);
 
-    declare_parameter<double>("RLVisionKick.goalie_clearance_power", 2.5);
+    declare_parameter<double>("RLVisionKick.goalie_clearance_power", 7.0);
 
     declare_parameter<int>("obstacle_avoidance.depth_sample_step", 16);
     declare_parameter<double>("obstacle_avoidance.obstacle_min_height", 0.15);

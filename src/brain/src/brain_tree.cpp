@@ -1906,14 +1906,18 @@ NodeStatus Analyze2::tick()
         }
     }
 
+    const auto &fd = brain->config->fieldDimensions;
+    // 只有球真正落入己方禁区才起踢解围；禁区前沿之外交给 guard_defend 防守。
+    const bool ballInOwnPenaltyArea =
+        source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength &&
+        std::fabs(source.field.y) < fd.penaltyAreaWidth / 2.0;
     const bool baseReady = source.usable && brain->data->tmImLead &&
         !teammateInVisualKick &&
         (brain->data->tmMyCostRank == 0 || brain->data->tmMyCost < 2.0) &&
         source.range <= maxRange && cooldownOk &&
         clearanceDirectionReady &&
-        source.field.x < -brain->config->fieldDimensions.circleRadius - 2.0;
-    const double sessionMaxX = -brain->config->fieldDimensions.length / 2.0 +
-        brain->config->fieldDimensions.penaltyAreaLength + 0.4;
+        ballInOwnPenaltyArea;
+    const double sessionMaxX = -fd.length / 2.0 + fd.penaltyAreaLength + 0.4;
     const bool sessionActive = active && visualKickMode && !forceIdle &&
         source.usable && source.field.x <= sessionMaxX;
     const bool visualKickReady = baseReady || sessionActive;
