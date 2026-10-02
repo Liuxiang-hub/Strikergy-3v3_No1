@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <cstdlib>
 #include <memory> 
 #include "brain_tree.h"
@@ -150,11 +152,59 @@ bool kickoffBallInOpponentHalf(Brain *brain, bool ballKnown)
     return brain->tree->getEntry<bool>("gc_is_kickoff_side");
 }
 
+bool teammateDoingVisualKick(Brain *brain)
+{
+    const int selfIdx = brain->config->playerId - 1;
+
+    for (int i = 0;
+         i < HL_MAX_NUM_PLAYERS;
+         i++)
+    {
+        if (i == selfIdx)
+            continue;
+
+        const auto &tm = brain->data->tmStatus[i];
+
+        if (tm.isAlive &&
+            tm.isInVisualKick)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool teammateHasBetterCost(Brain *brain)
+{
+    const int selfIdx = brain->config->playerId - 1;
+
+    for (int i = 0; i < HL_MAX_NUM_PLAYERS; i++)
+    {
+        if (i == selfIdx)
+            continue;
+
+        const auto &tm = brain->data->tmStatus[i];
+
+        if (!tm.isAlive)
+            continue;
+
+        if (std::isfinite(tm.cost) &&
+            tm.cost < brain->data->tmMyCost)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool canEnterVisualKick(Brain *brain)
 {
     auto logReject = [&](string reason)
     {
         brain->log->setTimeNow();
+
         brain->log->log(
             "debug/visual_kick_gate",
             rerun::TextLog(
@@ -171,10 +221,12 @@ bool canEnterVisualKick(Brain *brain)
     };
 
 
-    bool enable = false;
+    bool enable=false;
+
     brain->get_parameter(
         "strategy.enable_auto_visual_kick",
         enable);
+
 
     if (!enable)
     {
@@ -183,51 +235,37 @@ bool canEnterVisualKick(Brain *brain)
     }
 
 
-    if (brain->tree->getEntry<string>("gc_game_state") != "PLAY")
+    if (brain->tree->getEntry<string>("gc_game_state")
+        != "PLAY")
     {
-        logReject("not PLAY");
+        logReject("not play");
+        return false;
+    }
+
+    // 球权检查：正常要求 tmImLead；通信瞬断导致双方都丢 lead 时，
+    // 允许 cost rank 仍为 0 的机器人兜底尝试，避免没人抢球。
+    if (!brain->data->tmImLead && brain->data->tmMyCostRank != 0)
+    {
+        logReject("not ball owner");
         return false;
     }
 
 
-    if (!brain->data->tmImLead)
-    {
-        logReject("not leader");
-        return false;
-    }
-
-
+    // 当前最佳机器人
     if (brain->data->tmMyCostRank != 0)
     {
-        logReject("cost rank not 0");
+        logReject("not best cost");
         return false;
     }
 
-
-    const int selfIdx =
-        brain->config->playerId - 1;
-
-    for (int i = 0;
-         i < HL_MAX_NUM_PLAYERS;
-         i++)
+    // 只有这里限制 VisualKick
+    if (teammateDoingVisualKick(brain))
     {
-        if (i == selfIdx)
-            continue;
+        logReject(
+            "teammate already visual kicking"
+        );
 
-        const auto &tm =
-            brain->data->tmStatus[i];
-
-        if (tm.isAlive &&
-            tm.isInVisualKick)
-        {
-            logReject(
-                format(
-                    "teammate %d visual kicking",
-                    i+1
-                )
-            );
-            return false;
-        }
+        return false;
     }
 
 
@@ -236,7 +274,6 @@ bool canEnterVisualKick(Brain *brain)
         logReject("ball out");
         return false;
     }
-
 
     return true;
 }
@@ -591,6 +628,10 @@ NodeStatus CamScanField::tick()
     int msecCycle;
     getInput("msec_cycle", msecCycle);
 
+    if (msecCycle <= 0) {
+        brain->client->moveHead(highPitch, leftYaw);
+        return NodeStatus::SUCCESS;
+    }
     int cycleTime = msec % msecCycle;
     double pitch = cycleTime > (msecCycle / 2.0) ? lowPitch : highPitch;
     double yaw = cycleTime < (msecCycle / 2.0) ? (leftYaw - rightYaw) * (2.0 * cycleTime / msecCycle) + rightYaw : (leftYaw - rightYaw) * (2.0 * (msecCycle - cycleTime) / msecCycle) + rightYaw;
@@ -1755,7 +1796,7 @@ NodeStatus StrikerDecide::tick() {
 
     if (
         nearBallVisualKick &&
-        canEnterAutoVisualKick(brain)
+        canEnterVisualKick(brain)
     )
     {
         newDecision = "auto_visual_kick";
@@ -1799,9 +1840,14 @@ NodeStatus StrikerDecide::tick() {
             brain->data->tmMyCost,
             brain->data->tmMyCostRank
         ));
-    }else if (!brain->data->tmImLead && !kickoffAttack) {
+    }
+    else if (
+        teammateHasBetterCost(brain)
+        &&
+        !kickoffAttack
+    )
+    {
         newDecision = "assist";
-        color = 0x00FFFFFF;
     }
     else if (ballRange > chaseRangeThreshold * (lastDecision == "chase" ? 0.9 : 1.0))
     {
@@ -1844,8 +1890,12 @@ NodeStatus StrikerDecide::tick() {
     brain->log->logToScreen(
         "tree/Decide",
         format(
-            "Decision: %s ballrange: %.2f ballyaw: %.2f kickDir: %.2f rbDir: %.2f angleGoodForKick: %d angleGoodForShoot: %d lead: %d", 
-            newDecision.c_str(), ballRange, ballYaw, kickDir, dir_rb_f, angleGoodForKick, angleGoodForShoot, brain->data->tmImLead
+        "Decision:%s lead:%d rank:%d cost:%.2f visual:%d",
+        newDecision.c_str(),
+        brain->data->tmImLead,
+        brain->data->tmMyCostRank,
+        brain->data->tmMyCost,
+        brain->data->tmImInVisualKick
         ),
         color
     );
