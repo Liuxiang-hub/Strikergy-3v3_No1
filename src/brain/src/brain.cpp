@@ -558,9 +558,9 @@ void Brain::pubKickMsg() {
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
     } else if (dist > 6.0) {
-        power = 4.0;
+        power = 5.0;
     } else {
-        power = 3.5;
+        power = 4.0;
     }
     kickMsg.power = power;
 
