@@ -1672,6 +1672,8 @@ NodeStatus StrikerDecide::tick() {
     auto color = 0xFFFFFFFF; // for log
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
+        brain->data->tmImLead &&
+        brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentPenaltyArea &&
         visualKickDirectionReady &&
@@ -1679,7 +1681,7 @@ NodeStatus StrikerDecide::tick() {
 
     if (nearBallVisualKick)
     {
-        // 近球是本机的即时优先级，不再受 lead、cost rank 或开球待命分组限制。
+        // 近球也必须先获得队内踢球权，避免多机同时进入 VisualKick。
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
         color = 0xFF00FFFF;
