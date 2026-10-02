@@ -1896,24 +1896,13 @@ NodeStatus Analyze2::tick()
     const bool clearanceDirectionReady = target.interceptEntryReady ||
         clearanceDirectionError <= maxDirectionError;
 
-    bool teammateInVisualKick = false;
-    const int selfIdx = brain->config->playerId - 1;
-    for (int i = 0; i < brain->config->numOfPlayers && i < HL_MAX_NUM_PLAYERS; ++i) {
-        if (i != selfIdx && brain->data->tmStatus[i].isAlive &&
-            brain->data->tmStatus[i].isInVisualKick) {
-            teammateInVisualKick = true;
-            break;
-        }
-    }
-
     const auto &fd = brain->config->fieldDimensions;
     // 只有球真正落入己方禁区才起踢解围；禁区前沿之外交给 guard_defend 防守。
     const bool ballInOwnPenaltyArea =
         source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength &&
         std::fabs(source.field.y) < fd.penaltyAreaWidth / 2.0;
-    const bool baseReady = source.usable && brain->data->tmImLead &&
-        !teammateInVisualKick &&
-        (brain->data->tmMyCostRank == 0 || brain->data->tmMyCost < 2.0) &&
+    // 守门员在我方禁区内负责解围，不应被全队抢球权排名挡住。
+    const bool baseReady = source.usable &&
         source.range <= maxRange && cooldownOk &&
         clearanceDirectionReady &&
         ballInOwnPenaltyArea;

@@ -148,7 +148,7 @@ brain_node:
 
     RLVisionKick:
       visual_kick_version: kV2 # kV1 | kV2 修改此参数可更改visualkick调用版本
-      goalie_clearance_power: 7.0 # 守门员解围力度(期望踢球距离, m)
+      goalie_clearance_power: 6.0 # 守门员解围力度(期望踢球距离, m)
 
     locator:
       min_marker_count: 4
