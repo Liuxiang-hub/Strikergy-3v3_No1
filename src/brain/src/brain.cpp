@@ -2208,6 +2208,21 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
     tree->setEntry<bool>("penalty_kick_active", penaltyKickActive);
     tree->setEntry<bool>("penalty_kick_defending",
         penaltyKickActive && !isSubStateKickOffSide);
+    RCLCPP_INFO(
+        get_logger(),
+        "[kickoff_gc] packet=%u protocol=%u raw_state=%u stopped=%d phase=%u set_play=%u "
+        "kickoff_team=%u secondary_time=%d mapped_state=%s subtype=%s real=%s",
+        static_cast<unsigned>(msg.packet_number),
+        static_cast<unsigned>(msg.version),
+        static_cast<unsigned>(msg.state),
+        msg.stopped ? 1 : 0,
+        static_cast<unsigned>(msg.game_phase),
+        static_cast<unsigned>(msg.set_play),
+        static_cast<unsigned>(msg.kick_off_team),
+        static_cast<int>(msg.secondary_time),
+        gameState.c_str(),
+        gameSubStateType.c_str(),
+        data->realGameSubState.c_str());
 
     int setPlaySearchDirection = 0;
     const bool farSetPlaySearchEnabled =
@@ -4094,7 +4109,22 @@ void Brain::logLowFrequencyDiagnostics(const rclcpp::Time &now)
         ss << "game_state=" << gameState
            << " sub_state=" << gameSubState
            << " control_state=" << controlState
-           << " decision=" << decision;
+           << " decision=" << decision << "\n";
+        ss << "kickoff_diag protocol=" << tree->getEntry<int>("gc_protocol_version")
+           << " gc_age_ms=" << std::setprecision(0) << msecsSince(data->timeLastGamecontrolMsg)
+           << " secondary_time=" << tree->getEntry<int>("gc_secondary_time")
+           << " stopped=" << (tree->getEntry<bool>("gc_play_stopped") ? 1 : 0)
+           << " kickoff_side=" << (tree->getEntry<bool>("gc_is_kickoff_side") ? 1 : 0)
+           << " kickoff_active=" << (tree->getEntry<bool>("gc_kickoff_active") ? 1 : 0)
+           << " own_kickoff=" << (data->isKickingOff ? 1 : 0)
+           << " opponent_kickoff=" << (data->isOpponentKickingOff ? 1 : 0)
+           << " rank=" << (data->kickoffStrikerGroupLatched
+               ? data->kickoffStrikerGroupRank : data->tmMyStrikerCostRank)
+           << " lead=" << (data->tmImLead ? 1 : 0)
+           << " vision_age_ms=" << msecsSince(data->timeLastDet)
+           << " own_ball_detected=" << (data->ballDetected ? 1 : 0)
+           << " own_ball_known=" << (tree->getEntry<bool>("ball_location_known") ? 1 : 0)
+           << " teammate_ball_reliable=" << (tree->getEntry<bool>("tm_ball_pos_reliable") ? 1 : 0);
         const string statusText = ss.str();
 
         RCLCPP_INFO(get_logger(), "[low_frequency_status]\n%s", statusText.c_str());

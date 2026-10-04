@@ -1247,10 +1247,51 @@ NodeStatus Assist::tick() {
         targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7, -fd.width / 2.0 + 0.7);
     }
 
+    // Unified assist position: continue the line from the opponent goal
+    // center through the ball by 2 m toward our own goal. Face the opponent
+    // goal center.
+    const double assistDx = ballPos.x - oppGoalX;
+    const double assistDy = ballPos.y;
+    const double assistLineLength = std::hypot(assistDx, assistDy);
+    if (assistLineLength > 1e-3) {
+        targetPose.x = ballPos.x + 2.0 * assistDx / assistLineLength;
+        targetPose.y = ballPos.y + 2.0 * assistDy / assistLineLength;
+    } else {
+        targetPose.x = ballPos.x - 2.0;
+        targetPose.y = ballPos.y;
+    }
+    targetPose.theta = atan2(-ballPos.y, oppGoalX - ballPos.x);
+    targetPose.x = cap(targetPose.x, oppGoalX - fd.penaltyAreaLength - 0.2,
+        ownGoalX + distToGoalline);
+    targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7,
+        -fd.width / 2.0 + 0.7);
+
+    // Keep the endpoint clear of live teammates.
+    const int assistSelfIdx = brain->config->playerId - 1;
+    for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+        if (i == assistSelfIdx || !brain->data->tmStatus[i].isAlive) continue;
+        const auto &tmPose = brain->data->tmStatus[i].robotPoseToField;
+        const double awayX = targetPose.x - tmPose.x;
+        const double awayY = targetPose.y - tmPose.y;
+        const double awayDist = std::hypot(awayX, awayY);
+        if (awayDist < 0.8) {
+            const double scale = (0.8 - awayDist) / std::max(awayDist, 1e-3);
+            targetPose.x += awayX * scale;
+            targetPose.y += awayY * scale;
+        }
+    }
+    targetPose.x = cap(targetPose.x, oppGoalX - fd.penaltyAreaLength - 0.2,
+        ownGoalX + distToGoalline);
+    targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7,
+        -fd.width / 2.0 + 0.7);
+    targetPose.theta = atan2(-ballPos.y, oppGoalX - ballPos.x);
+    log(format("line assist target=(%.2f, %.2f) face_goal=(%.2f, %.2f)",
+        targetPose.x, targetPose.y, oppGoalX, 0.0));
+
     double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
     if ( // 认为到达了目标位置
         dist < distTolerance
-        && fabs(brain->data->ball.yawToRobot) < thetaTolerance
+        && fabs(toPInPI(targetPose.theta - robotPose.theta)) < thetaTolerance
     ) {
         brain->client->setVelocity(0, 0, 0);
         return NodeStatus::SUCCESS;
@@ -1261,18 +1302,16 @@ NodeStatus Assist::tick() {
     double targetDir = atan2(targetPose_r.y, targetPose_r.x);
     double distToObstacle = brain->distToObstacle(targetDir);
 
-    bool avoidObstacle;
-    brain->get_parameter("obstacle_avoidance.avoid_during_chase", avoidObstacle);
     double oaSafeDist;
     brain->get_parameter("obstacle_avoidance.chase_ao_safe_dist", oaSafeDist);
 
-    if (avoidObstacle && distToObstacle < oaSafeDist) {
+    if (distToObstacle < oaSafeDist) {
         log("avoid obstacle");
         auto avoidDir = brain->calcAvoidDir(targetDir, oaSafeDist);
         const double speed = 0.5;
         vx = speed * cos(avoidDir);
         vy = speed * sin(avoidDir);
-        vtheta = brain->data->ball.yawToRobot;
+        vtheta = toPInPI(targetPose.theta - robotPose.theta);
     } else {
         vx = targetPose_r.x;
         vy = targetPose_r.y;
@@ -1286,6 +1325,37 @@ NodeStatus Assist::tick() {
     vx = cap(vx, vxLimit, -0.25);     // 进一步限速, 不允许后退速度过快.
     vy = cap(vy, vyLimit, -vyLimit);     // 进一步限速
      
+
+    // Keep the receiving path clear of the ball and live teammates.
+    const double pathDx = targetPose.x - robotPose.x;
+    const double pathDy = targetPose.y - robotPose.y;
+    const double pathLength2 = pathDx * pathDx + pathDy * pathDy;
+    double fieldVx = cos(robotPose.theta) * vx - sin(robotPose.theta) * vy;
+    double fieldVy = sin(robotPose.theta) * vx + cos(robotPose.theta) * vy;
+    auto steerAroundFieldPoint = [&](double pointX, double pointY, double clearance) {
+        if (pathLength2 < 1e-6) return;
+        const double relX = pointX - robotPose.x;
+        const double relY = pointY - robotPose.y;
+        const double projection = (relX * pathDx + relY * pathDy) / pathLength2;
+        if (projection <= 0.0 || projection >= 1.0) return;
+        const double cross = pathDx * relY - pathDy * relX;
+        const double distance = fabs(cross) / sqrt(pathLength2);
+        if (distance >= clearance) return;
+        const double sign = cross >= 0.0 ? -1.0 : 1.0;
+        const double invLength = 1.0 / sqrt(pathLength2);
+        fieldVx += sign * (-pathDy * invLength) * 0.35;
+        fieldVy += sign * ( pathDx * invLength) * 0.35;
+    };
+    steerAroundFieldPoint(ballPos.x, ballPos.y, 0.7);
+    for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+        if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+        const auto &tmPose = brain->data->tmStatus[i].robotPoseToField;
+        steerAroundFieldPoint(tmPose.x, tmPose.y, 0.8);
+    }
+    vx = cos(robotPose.theta) * fieldVx + sin(robotPose.theta) * fieldVy;
+    vy = -sin(robotPose.theta) * fieldVx + cos(robotPose.theta) * fieldVy;
+    vx = cap(vx, vxLimit, -0.25);
+    vy = cap(vy, vyLimit, -vyLimit);
 
     brain->client->setVelocity(vx, vy, vtheta, false, false, false);
     return NodeStatus::SUCCESS;
@@ -1344,6 +1414,15 @@ NodeStatus KickoffStand::tick()
 
     const auto robotPose = brain->data->robotPoseToField;
     const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+    RCLCPP_INFO_THROTTLE(
+        brain->get_logger(), *brain->get_clock(), 2000,
+        "[kickoff_stand] rank=%d target=(%.2f,%.2f) distance=%.2f tolerance=%.2f "
+        "spinning=%d ball_known=%d local_ball=%d teammate_ball=%d",
+        rank, targetPose.x, targetPose.y, dist, distTolerance,
+        dist <= distTolerance ? 1 : 0,
+        ballLocationKnown ? 1 : 0,
+        brain->data->ballDetected ? 1 : 0,
+        brain->tree->getEntry<bool>("tm_ball_pos_reliable") ? 1 : 0);
     if (dist <= distTolerance) {
         // 到达待命点后继续原地转身。上游的定位和 CamFindAndTrackBall
         // 仍会在本帧先执行，因此旋转同时用于定位和扩大找球视野。
