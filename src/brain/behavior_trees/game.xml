@@ -89,16 +89,6 @@
                                 _while="gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
                             <SubTree ID="NormalPlay" _autoremap="true"
                                 _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
-                            <SubTree ID="DirectFreeKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='DIRECT_FREEKICK'" />
-                            <SubTree ID="IndirectFreeKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='INDIRECT_FREEKICK'" />
-                            <SubTree ID="CornerKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='CORNER_KICK'" />
-                            <SubTree ID="GoalKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='GOAL_KICK'" />
-                            <SubTree ID="ThrowIn" _autoremap="true"
-                                _while="gc_real_game_sub_state=='THROW_IN'" />
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='END'" name="比赛结束">
