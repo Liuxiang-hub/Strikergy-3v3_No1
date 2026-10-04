@@ -1317,8 +1317,18 @@ void Brain::updateKickoffMemory() {
         tree->getEntry<int>("gc_protocol_version") >= 20
         && !opponentSetPlay
         && opponentSetPlayLatched;
+    const bool isOwnPrimaryKickoff =
+        tree->getEntry<int>("gc_set_play") == 0
+        && tree->getEntry<bool>("gc_is_kickoff_side");
 
-    if (isV20OpponentSetPlayFinished) {
+    if (isOwnPrimaryKickoff) {
+        // The opponent-kickoff wait flag is latched across frames. Clear any
+        // stale latch as soon as the referee identifies us as the primary
+        // kickoff side, so PLAY starts our kickoff immediately instead of
+        // waiting for the 10-second Ball Free countdown.
+        tree->setEntry<bool>("wait_for_opponent_kickoff", false);
+        waitingForOpponentPrimaryKickoff = false;
+    } else if (isV20OpponentSetPlayFinished) {
         // 新版裁判机用 set_play 从非 0 变为 0 表示定位球结束，即 Ball Free。
         tree->setEntry<bool>("wait_for_opponent_kickoff", false);
         waitingForOpponentPrimaryKickoff = false;
