@@ -4339,11 +4339,11 @@ NodeStatus GoToReadyPosition::tick()
             strikerRank = std::clamp(strikerRank, 0, 3);
         }
         if (strikerRank == 0) {
-            tx = isKickoff ? - fd.circleRadius : -2.0;
+            tx = isKickoff ? - fd.circleRadius : -2.3;
             ty = 0.0;
         } else if (strikerRank == 1) {
             tx = isKickoff ? - fd.circleRadius + 1.0 : -4.5;
-            ty = isKickoff ? -2.0 : -0.5;
+            ty = isKickoff ? -2.5 : -0.5;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
             //ty = fd.goalAreaWidth / 2.0;
