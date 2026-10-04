@@ -7,6 +7,7 @@
     <include path="./subtrees/subtree_striker_freekick.xml" />
     <include path="./subtrees/subtree_goal_keeper_freekick.xml" />
     <include path="./subtrees/subtree_goal_keeper_penalty_kick.xml" />
+    <include path="./subtrees/subtree_normal_play.xml" />
     <include path="./subtrees/subtree_kickoff_play.xml" />
     <include path="./subtrees/subtree_direct_free_kick.xml" />
     <include path="./subtrees/subtree_indirect_free_kick.xml" />
@@ -86,10 +87,8 @@
                         <ReactiveSequence _while="gc_game_state=='PLAY'" name="比赛">
                             <SubTree ID="KickoffPlay" _autoremap="true"
                                 _while="gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
-                            <SubTree ID="StrikerPlay" _autoremap="true"
-                                _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME') &amp;&amp; (player_role == 'striker' || player_role == 'supporter')" />
-                            <SubTree ID="GoalKeeperPlay" _autoremap="true"
-                                _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME') &amp;&amp; player_role == 'keeper'" />
+                            <SubTree ID="NormalPlay" _autoremap="true"
+                                _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
                             <SubTree ID="DirectFreeKick" _autoremap="true"
                                 _while="gc_real_game_sub_state=='DIRECT_FREEKICK'" />
                             <SubTree ID="IndirectFreeKick" _autoremap="true"

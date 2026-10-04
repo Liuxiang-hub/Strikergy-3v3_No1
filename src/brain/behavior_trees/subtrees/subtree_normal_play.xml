@@ -1,0 +1,10 @@
+<root BTCPP_format="4">
+    <BehaviorTree ID="NormalPlay">
+        <ReactiveSequence>
+            <SubTree ID="StrikerPlay" _autoremap="true"
+                _while="player_role == 'striker' || player_role == 'supporter'" />
+            <SubTree ID="GoalKeeperPlay" _autoremap="true"
+                _while="player_role == 'keeper'" />
+        </ReactiveSequence>
+    </BehaviorTree>
+</root>

@@ -595,10 +595,24 @@ void Brain::handleSpecialStates() {
             data->opponentKickoffStartTime = now;
             data->isKickingOff = false;
         }
-    } else if (msecsSince(data->kickoffStartTime) > KICKOFF_DURATION * 1000) {
+    } else if (gameState == "PLAY" && normalKickoffState
+        && (data->isKickingOff || data->isOpponentKickingOff)) {
+        const int protocolVersion = tree->getEntry<int>("gc_protocol_version");
+        const bool gameControllerSaysBallFree =
+            protocolVersion >= 20 &&
+            tree->getEntry<int>("gc_secondary_time") <= 0;
+        const bool legacyTimedOut =
+            protocolVersion < 20 &&
+            ((data->isKickingOff &&
+              msecsSince(data->kickoffStartTime) > KICKOFF_DURATION * 1000) ||
+             (data->isOpponentKickingOff &&
+              msecsSince(data->opponentKickoffStartTime) > KICKOFF_DURATION * 1000));
+        if (gameControllerSaysBallFree || legacyTimedOut) {
+            data->isKickingOff = false;
+            data->isOpponentKickingOff = false;
+        }
+    } else if (gameState != "SET") {
         data->isKickingOff = false;
-    }
-    if (msecsSince(data->opponentKickoffStartTime) > KICKOFF_DURATION * 1000) {
         data->isOpponentKickingOff = false;
     }
     tree->setEntry<bool>(
@@ -1286,17 +1300,7 @@ void Brain::updateRobotMemory() {
 
 void Brain::updateKickoffMemory() {
     
-    static Point ballPos;
     static bool waitingForOpponentPrimaryKickoff = false;
-    const double BALL_MOVE_THRESHOLD_FACTOR = 0.15; 
-    const double BALL_MOVE_THRESHOLD_MIN = 0.3; 
-    auto ballMoved = [=]() {
-        if (!data->ballDetected) return false; 
-        double range = data->ball.range;
-        double threshold = max(range * BALL_MOVE_THRESHOLD_FACTOR, BALL_MOVE_THRESHOLD_MIN);
-        double posChange = norm(data->ball.posToRobot.x - ballPos.x, data->ball.posToRobot.y - ballPos.y);
-        return posChange > threshold;
-    };
     static rclcpp::Time kickOffTime;
     static bool opponentSetPlayLatched = false;
     const double TIMEOUT = 1000 * 10; 
@@ -1308,6 +1312,8 @@ void Brain::updateKickoffMemory() {
         && !tree->getEntry<bool>("gc_is_kickoff_side")
     );
     bool isWaitingForLegacyFreekickPreparation = (
+        tree->getEntry<int>("gc_protocol_version") < 20
+        &&
         (tree->getEntry<string>("gc_game_sub_state") == "SET" || tree->getEntry<string>("gc_game_sub_state") == "GET_READY")
         && !tree->getEntry<bool>("gc_is_sub_state_kickoff_side")
     );
@@ -1340,7 +1346,6 @@ void Brain::updateKickoffMemory() {
         || isWaitingForKickoffPreparation
         || isWaitingForV20SetPlayPreparation
         || isNewOpponentSetPlay) {
-        ballPos = data->ball.posToRobot;
         kickOffTime = get_clock()->now();
         tree->setEntry<bool>("wait_for_opponent_kickoff", true);
         waitingForOpponentPrimaryKickoff = isWaitingForKickoffPreparation;
@@ -1353,13 +1358,30 @@ void Brain::updateKickoffMemory() {
         const bool gameControllerSaysBallFree =
             tree->getEntry<string>("gc_game_state") == "PLAY"
             && tree->getEntry<int>("gc_secondary_time") <= 0;
-        const bool legacyOrSetPlayReleased =
-            !isV20PrimaryKickoff && (ballMoved() || timeReached());
+        const bool releasedByTimeout =
+            !isV20PrimaryKickoff && timeReached();
 
         if ((isV20PrimaryKickoff && gameControllerSaysBallFree)
-            || legacyOrSetPlayReleased) {
+            || releasedByTimeout) {
             tree->setEntry<bool>("wait_for_opponent_kickoff", false);
             waitingForOpponentPrimaryKickoff = false;
+            const bool isV20OpponentNonPenaltySetPlay =
+                tree->getEntry<int>("gc_protocol_version") >= 20 &&
+                opponentSetPlay &&
+                data->realGameSubState != "PENALTY_KICK";
+            if (releasedByTimeout && isV20OpponentNonPenaltySetPlay) {
+                // Some controllers may keep set_play non-zero after the ball
+                // is released. Latch Ball Free locally after the safety timeout
+                // until the current set play clears or a new stopped preparation begins.
+                data->opponentSetPlayReleasedByFallback = true;
+                data->opponentSetPlayFallbackCode =
+                    tree->getEntry<int>("gc_set_play");
+                data->realGameSubState = "NONE";
+                tree->setEntry<string>("gc_game_sub_state_type", "NONE");
+                tree->setEntry<string>("gc_game_sub_state", "PLAY");
+                tree->setEntry<string>("gc_real_game_sub_state", "NONE");
+                tree->setEntry<int>("gc_opponent_set_play_search_direction", 0);
+            }
         }
     }
 
@@ -2133,6 +2155,19 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
         msg.version >= 20
         ? static_cast<int>(msg.kick_off_team) == config->teamId
         : static_cast<int>(msg.secondary_state_info[0]) == config->teamId;
+    const bool isV20OpponentNonPenaltySetPlay =
+        msg.version >= 20 && msg.set_play != 0 &&
+        !isSubStateKickOffSide &&
+        data->realGameSubState != "PENALTY_KICK";
+    const bool fallbackBelongsToCurrentSetPlay =
+        data->opponentSetPlayReleasedByFallback &&
+        data->opponentSetPlayFallbackCode == static_cast<int>(msg.set_play);
+    if (!isV20OpponentNonPenaltySetPlay || msg.stopped ||
+        (data->opponentSetPlayReleasedByFallback &&
+         !fallbackBelongsToCurrentSetPlay)) {
+        data->opponentSetPlayReleasedByFallback = false;
+        data->opponentSetPlayFallbackCode = 0;
+    }
 
     if (msg.version >= 20) {
         if (gameSubStateType == "FREE_KICK") {
@@ -2156,6 +2191,12 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
         gameSubState = legacySubState < gameSubStateMap.size()
             ? gameSubStateMap[legacySubState]
             : "STOP";
+    }
+    if (isV20OpponentNonPenaltySetPlay &&
+        fallbackBelongsToCurrentSetPlay && !msg.stopped) {
+        gameSubStateType = "NONE";
+        gameSubState = "PLAY";
+        data->realGameSubState = "NONE";
     }
     tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
     tree->setEntry<string>("gc_game_sub_state", gameSubState);
