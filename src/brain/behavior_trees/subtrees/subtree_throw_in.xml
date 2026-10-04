@@ -1,0 +1,20 @@
+<root BTCPP_format="4">
+    <BehaviorTree ID="ThrowIn">
+        <ReactiveSequence>
+            <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_sub_state=='GET_READY'">
+                <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
+                <SubTree ID="StrikerFreekick" _autoremap="true"
+                    _while="player_role == 'striker' || player_role == 'supporter'" />
+                <SubTree ID="GoalKeeperFreekick" _autoremap="true"
+                    _while="player_role == 'keeper'" />
+            </ReactiveSequence>
+            <SetVelocity _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; (gc_game_sub_state=='STOP' || gc_game_sub_state=='SET')" />
+            <ReactiveSequence _while="gc_game_sub_state_type=='NONE'">
+                <SubTree ID="StrikerPlay" _autoremap="true"
+                    _while="player_role == 'striker' || player_role == 'supporter'" />
+                <SubTree ID="GoalKeeperPlay" _autoremap="true"
+                    _while="player_role == 'keeper'" />
+            </ReactiveSequence>
+        </ReactiveSequence>
+    </BehaviorTree>
+</root>

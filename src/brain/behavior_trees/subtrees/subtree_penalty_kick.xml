@@ -1,0 +1,17 @@
+<root BTCPP_format="4">
+    <BehaviorTree ID="PenaltyKick">
+        <ReactiveSequence>
+            <SetVelocity _while="gc_play_stopped" />
+            <ReactiveSequence _while="!gc_play_stopped &amp;&amp; penalty_kick_defending">
+                <SubTree ID="GoalKeeperPenaltyKick" _autoremap="true"
+                    _while="player_role == 'keeper'" />
+                <SetVelocity _while="player_role != 'keeper'" />
+            </ReactiveSequence>
+            <ReactiveSequence _while="!gc_play_stopped &amp;&amp; !penalty_kick_defending">
+                <SubTree ID="StrikerPlay" _autoremap="true"
+                    _while="player_role == 'striker' || player_role == 'supporter'" />
+                <SetVelocity _while="player_role == 'keeper'" />
+            </ReactiveSequence>
+        </ReactiveSequence>
+    </BehaviorTree>
+</root>

@@ -7,6 +7,14 @@
     <include path="./subtrees/subtree_striker_freekick.xml" />
     <include path="./subtrees/subtree_goal_keeper_freekick.xml" />
     <include path="./subtrees/subtree_goal_keeper_penalty_kick.xml" />
+    <include path="./subtrees/subtree_kickoff_play.xml" />
+    <include path="./subtrees/subtree_direct_free_kick.xml" />
+    <include path="./subtrees/subtree_indirect_free_kick.xml" />
+    <include path="./subtrees/subtree_corner_kick.xml" />
+    <include path="./subtrees/subtree_goal_kick.xml" />
+    <include path="./subtrees/subtree_throw_in.xml" />
+    <include path="./subtrees/subtree_penalty_kick.xml" />
+    <include path="./subtrees/subtree_unknown_set_play.xml" />
     <include path="./subtrees/subtree_locate.xml" />
     <include path="./subtrees/subtree_auto_standup_and_locate.xml" />
     <BehaviorTree ID="MainTree">
@@ -76,8 +84,22 @@
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='PLAY'" name="比赛">
-                            <SubTree ID="StrikerPlay" _autoremap="true" _while="player_role == 'striker' || player_role == 'supporter'" />
-                            <SubTree ID="GoalKeeperPlay" _autoremap="true" _while="player_role == 'keeper'" />
+                            <SubTree ID="KickoffPlay" _autoremap="true"
+                                _while="gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
+                            <SubTree ID="StrikerPlay" _autoremap="true"
+                                _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME') &amp;&amp; (player_role == 'striker' || player_role == 'supporter')" />
+                            <SubTree ID="GoalKeeperPlay" _autoremap="true"
+                                _while="!gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME') &amp;&amp; player_role == 'keeper'" />
+                            <SubTree ID="DirectFreeKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='DIRECT_FREEKICK'" />
+                            <SubTree ID="IndirectFreeKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='INDIRECT_FREEKICK'" />
+                            <SubTree ID="CornerKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='CORNER_KICK'" />
+                            <SubTree ID="GoalKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='GOAL_KICK'" />
+                            <SubTree ID="ThrowIn" _autoremap="true"
+                                _while="gc_real_game_sub_state=='THROW_IN'" />
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='END'" name="比赛结束">
@@ -87,33 +109,22 @@
                     </ReactiveSequence>
 
                     <ReactiveSequence _while="penalty_kick_active &amp;&amp; gc_game_state=='PLAY'" name="点球策略">
-                        <ReactiveSequence _while="penalty_kick_defending" name="我方防守点球">
-                            <SubTree ID="GoalKeeperPenaltyKick" _autoremap="true" _while="player_role == 'keeper'" />
-                            <SetVelocity _while="player_role != 'keeper'" />
-                        </ReactiveSequence>
-                        <ReactiveSequence _while="!penalty_kick_defending" name="我方主罚点球">
-                            <SubTree ID="StrikerPlay" _autoremap="true" _while="player_role == 'striker' || player_role == 'supporter'" />
-                            <SetVelocity _while="player_role == 'keeper'" />
-                        </ReactiveSequence>
+                        <SubTree ID="PenaltyKick" _autoremap="true" />
                     </ReactiveSequence>
 
                     <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_state=='PLAY' &amp;&amp; !penalty_kick_active" name="开任意球">
-                        <ReactiveSequence _while="gc_game_sub_state=='STOP'">
-                            <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
-                            <SubTree ID="Locate" _autoremap="true" _while="ball_location_known"/>
-                            <SetVelocity />
-                        </ReactiveSequence>
-                        <ReactiveSequence _while="gc_game_sub_state=='GET_READY'">
-                            <!-- <SubTree ID="CamFindAndTrackBall" _autoremap="true" /> -->
-                            <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
-                            <SubTree ID="StrikerFreekick" _autoremap="true" _while="player_role == 'striker' || player_role == 'supporter'" />
-                            <SubTree ID="GoalKeeperFreekick" _autoremap="true" _while="player_role == 'keeper'"/>
-                        </ReactiveSequence>
-                        <ReactiveSequence _while="gc_game_sub_state=='SET'">
-                            <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
-                            <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
-                            <SetVelocity />
-                        </ReactiveSequence>
+                        <SubTree ID="DirectFreeKick" _autoremap="true"
+                            _while="gc_real_game_sub_state=='DIRECT_FREEKICK'" />
+                        <SubTree ID="IndirectFreeKick" _autoremap="true"
+                            _while="gc_real_game_sub_state=='INDIRECT_FREEKICK'" />
+                        <SubTree ID="CornerKick" _autoremap="true"
+                            _while="gc_real_game_sub_state=='CORNER_KICK'" />
+                        <SubTree ID="GoalKick" _autoremap="true"
+                            _while="gc_real_game_sub_state=='GOAL_KICK'" />
+                        <SubTree ID="ThrowIn" _autoremap="true"
+                            _while="gc_real_game_sub_state=='THROW_IN'" />
+                        <SubTree ID="UnknownSetPlay" _autoremap="true"
+                            _while="gc_real_game_sub_state=='UNKNOWN_SET_PLAY'" />
                     </ReactiveSequence>
 
                     </ReactiveSequence>

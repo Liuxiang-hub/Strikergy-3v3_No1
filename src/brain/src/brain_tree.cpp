@@ -252,7 +252,9 @@ void BrainTree::initEntry()
     setEntry<string>("gc_game_state", "");
     setEntry<string>("gc_game_sub_state_type", "NONE");
     setEntry<string>("gc_game_sub_state", "");
+    setEntry<string>("gc_real_game_sub_state", "NONE");
     setEntry<bool>("gc_is_kickoff_side", false);
+    setEntry<bool>("gc_kickoff_active", false);
     setEntry<bool>("gc_is_sub_state_kickoff_side", false);
     setEntry<bool>("gc_is_under_penalty", false);
     setEntry<bool>("gc_play_stopped", false);

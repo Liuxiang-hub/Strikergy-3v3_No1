@@ -601,6 +601,10 @@ void Brain::handleSpecialStates() {
     if (msecsSince(data->opponentKickoffStartTime) > KICKOFF_DURATION * 1000) {
         data->isOpponentKickingOff = false;
     }
+    tree->setEntry<bool>(
+        "gc_kickoff_active",
+        gameState == "PLAY" &&
+            (data->isKickingOff || data->isOpponentKickingOff));
 
     if (gameState == "PLAY" && gameSubStateType == "FREE_KICK"
         && isFreekickKickoffSide && !tree->getEntry<bool>("gc_play_stopped")) {
@@ -2155,6 +2159,7 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
     }
     tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
     tree->setEntry<string>("gc_game_sub_state", gameSubState);
+    tree->setEntry<string>("gc_real_game_sub_state", data->realGameSubState);
     tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
     const bool penaltyKickActive = gameState == "PLAY" &&
         (data->realGameSubState == "PENALTY_KICK" ||
