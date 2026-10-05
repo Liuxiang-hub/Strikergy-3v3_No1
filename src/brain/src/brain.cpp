@@ -1135,31 +1135,44 @@ void Brain::updateObstacleMemory() {
         obs_new.push_back(data->ball);
     }
 
-    // READY 阶段按照编号建立单向让行：1 号避让 2、3 号，2 号避让 3 号。
     // 队友位置来自 team communication，因此即使相机没有识别出队友，也能参与避障。
     // 只接受新鲜的在场队友数据，避免用断连后的旧位置制造虚假障碍。
+    constexpr double TEAMMATE_POSITION_TIMEOUT_MS = 500.0;
+    const auto addTeammateObstacle = [&](int teammateId, const string &name) {
+        const auto &teammate = data->tmStatus[teammateId - 1];
+        if (!teammate.isAlive ||
+            msecsSince(teammate.timeLastCom) > TEAMMATE_POSITION_TIMEOUT_MS ||
+            !std::isfinite(teammate.robotPoseToField.x) ||
+            !std::isfinite(teammate.robotPoseToField.y)) {
+            return;
+        }
+
+        GameObject teammateObstacle;
+        teammateObstacle.label = "Teammate";
+        teammateObstacle.name = name;
+        teammateObstacle.confidence = 100.0;
+        teammateObstacle.avoidanceRadius = 0.3;
+        teammateObstacle.posToField.x = teammate.robotPoseToField.x;
+        teammateObstacle.posToField.y = teammate.robotPoseToField.y;
+        teammateObstacle.timePoint = get_clock()->now();
+        updateRelativePos(teammateObstacle);
+        obs_new.push_back(teammateObstacle);
+    };
+
     if (tree->getEntry<string>("gc_game_state") == "READY") {
-        constexpr double TEAMMATE_POSITION_TIMEOUT_MS = 500.0;
+        // READY 阶段按照编号建立单向让行：1 号避让 2、3 号，2 号避让 3 号。
         const int selfId = config->playerId;
         const int playerCount = std::clamp(config->numOfPlayers, 1, HL_MAX_NUM_PLAYERS);
-        for (int teammateId = selfId + 1; teammateId <= playerCount; ++teammateId) {
-            const auto &teammate = data->tmStatus[teammateId - 1];
-            if (!teammate.isAlive ||
-                msecsSince(teammate.timeLastCom) > TEAMMATE_POSITION_TIMEOUT_MS ||
-                !std::isfinite(teammate.robotPoseToField.x) ||
-                !std::isfinite(teammate.robotPoseToField.y)) {
-                continue;
-            }
+        for (int teammateId = selfId + 1; teammateId <= playerCount; ++teammateId)
+            addTeammateObstacle(teammateId, format("ready_teammate_%d", teammateId));
+    }
 
-            GameObject teammateObstacle;
-            teammateObstacle.label = "Teammate";
-            teammateObstacle.name = format("teammate_%d", teammateId);
-            teammateObstacle.confidence = 100.0;
-            teammateObstacle.posToField.x = teammate.robotPoseToField.x;
-            teammateObstacle.posToField.y = teammate.robotPoseToField.y;
-            teammateObstacle.timePoint = get_clock()->now();
-            updateRelativePos(teammateObstacle);
-            obs_new.push_back(teammateObstacle);
+    if (tree->getEntry<string>("decision") == "assist") {
+        // Assist 去接应位时，主动为当前控球 attacker（isLead）让路。
+        for (int teammateId = 1; teammateId <= HL_MAX_NUM_PLAYERS; ++teammateId) {
+            if (teammateId == config->playerId) continue;
+            if (data->tmStatus[teammateId - 1].isLead)
+                addTeammateObstacle(teammateId, format("assist_attacker_%d", teammateId));
         }
     }
 
@@ -4020,8 +4033,14 @@ double Brain::distToObstacle(double angle) {
             cos(angle) * 100, sin(angle) * 100
         };
         double perpDist = fabs(pointPerpDistToLine(Point2D{o.posToRobot.x, o.posToRobot.y}, line));
-        if (perpDist < collisionThreshold) {
+        const double obstacleRadius = std::max(0.0, o.avoidanceRadius);
+        const double effectiveRadius = collisionThreshold + obstacleRadius;
+        if (perpDist < effectiveRadius) {
             double dist = innerProduct(vector<double>{o.posToRobot.x, o.posToRobot.y}, vector<double>{cos(angle), sin(angle)});
+            if (obstacleRadius > 0.0) {
+                // 对圆形队友障碍物返回射线首先接触圆边缘的距离，而不是圆心距离。
+                dist -= sqrt(std::max(0.0, effectiveRadius * effectiveRadius - perpDist * perpDist));
+            }
             if (dist > 0 && dist < minDist) {
                 minDist = dist;
             }

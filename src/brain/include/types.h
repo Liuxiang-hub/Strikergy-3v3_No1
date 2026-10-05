@@ -80,6 +80,7 @@ struct GameObject
     BoundingBox boundingBox;     // 物体在摄像头中的识别框, 左上角为 0 点, 向右为 x, 向下为 y
     Point2D precisePixelPoint;   // 物体的精确像素点位置, 仅地面标志点有这一数据
     double confidence = 0.0;     // 识别的置信度, 对 obstacle 来说, 是大于 0 的数字, 代表障碍网格中高于阈值的点数
+    double avoidanceRadius = 0.0; // 用于路径避让的圆形占位半径，0 表示点状障碍物
     Point posToRobot;            // 物体在机器人本体坐标系的的位置, 位置为 2D, 忽略 z 值.
 
     // --- 在 processDetectedObject 函数中计算获得 ---
