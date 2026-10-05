@@ -1332,7 +1332,8 @@ NodeStatus Assist::tick() {
     const double pathLength2 = pathDx * pathDx + pathDy * pathDy;
     double fieldVx = cos(robotPose.theta) * vx - sin(robotPose.theta) * vy;
     double fieldVy = sin(robotPose.theta) * vx + cos(robotPose.theta) * vy;
-    auto steerAroundFieldPoint = [&](double pointX, double pointY, double clearance) {
+    auto steerAroundFieldPoint = [&](double pointX, double pointY, double clearance,
+                                     double lateralSpeed) {
         if (pathLength2 < 1e-6) return;
         const double relX = pointX - robotPose.x;
         const double relY = pointY - robotPose.y;
@@ -1343,14 +1344,22 @@ NodeStatus Assist::tick() {
         if (distance >= clearance) return;
         const double sign = cross >= 0.0 ? -1.0 : 1.0;
         const double invLength = 1.0 / sqrt(pathLength2);
-        fieldVx += sign * (-pathDy * invLength) * 0.35;
-        fieldVy += sign * ( pathDx * invLength) * 0.35;
+        fieldVx += sign * (-pathDy * invLength) * lateralSpeed;
+        fieldVy += sign * ( pathDx * invLength) * lateralSpeed;
     };
-    steerAroundFieldPoint(ballPos.x, ballPos.y, 0.7);
+    // Treat the football as a circular obstacle with a 0.5 m radius.
+    // The robot's own footprint is handled by the motion layer separately;
+    // this value is the explicit ball-clearance radius for Assist routing.
+    constexpr double ASSIST_BALL_RADIUS_M = 0.5;
+    constexpr double ASSIST_BALL_LATERAL_AVOID_SPEED = 0.6;
+    constexpr double ASSIST_TEAMMATE_LATERAL_AVOID_SPEED = 0.9;
+    steerAroundFieldPoint(ballPos.x, ballPos.y, ASSIST_BALL_RADIUS_M,
+                          ASSIST_BALL_LATERAL_AVOID_SPEED);
     for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
         if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
         const auto &tmPose = brain->data->tmStatus[i].robotPoseToField;
-        steerAroundFieldPoint(tmPose.x, tmPose.y, 0.8);
+        steerAroundFieldPoint(tmPose.x, tmPose.y, 0.8,
+                              ASSIST_TEAMMATE_LATERAL_AVOID_SPEED);
     }
     vx = cos(robotPose.theta) * fieldVx + sin(robotPose.theta) * fieldVy;
     vy = -sin(robotPose.theta) * fieldVx + cos(robotPose.theta) * fieldVy;
