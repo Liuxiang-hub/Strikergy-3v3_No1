@@ -1288,17 +1288,68 @@ NodeStatus Assist::tick() {
     log(format("line assist target=(%.2f, %.2f) face_goal=(%.2f, %.2f)",
         targetPose.x, targetPose.y, oppGoalX, 0.0));
 
-    double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+    // If the direct receiving path cuts through the ball, first drive to a
+    // locked side waypoint, then continue to the final assist position.
+    static int ballAvoidPhase = 0; // 0=direct, 1=side waypoint, 2=final target
+    static Pose2D ballAvoidWaypoint{};
+    constexpr double ASSIST_BALL_INFLATED_RADIUS = 0.9;
+    constexpr double ASSIST_BALL_WAYPOINT_EXTRA = 0.15;
+    const auto pathHitsBall = [&](const Pose2D &from, const Pose2D &to) {
+        const double dx = to.x - from.x;
+        const double dy = to.y - from.y;
+        const double len2 = dx * dx + dy * dy;
+        if (len2 < 1e-6) return false;
+        const double ux = ballPos.x - from.x;
+        const double uy = ballPos.y - from.y;
+        const double projection = (ux * dx + uy * dy) / len2;
+        if (projection <= 0.0 || projection >= 1.0) return false;
+        const double cross = dx * uy - dy * ux;
+        return std::fabs(cross) / std::sqrt(len2) < ASSIST_BALL_INFLATED_RADIUS;
+    };
+    if (ballAvoidPhase == 0 && pathHitsBall(robotPose, targetPose)) {
+        const double dx = targetPose.x - robotPose.x;
+        const double dy = targetPose.y - robotPose.y;
+        const double length = std::max(1e-3, std::hypot(dx, dy));
+        const double nx = -dy / length;
+        const double ny = dx / length;
+        const double cross = dx * (ballPos.y - robotPose.y) -
+            dy * (ballPos.x - robotPose.x);
+        const double side = cross >= 0.0 ? -1.0 : 1.0;
+        const double clearance = ASSIST_BALL_INFLATED_RADIUS + ASSIST_BALL_WAYPOINT_EXTRA;
+        ballAvoidWaypoint.x = ballPos.x + side * nx * clearance;
+        ballAvoidWaypoint.y = ballPos.y + side * ny * clearance;
+        ballAvoidWaypoint.theta = std::atan2(
+            targetPose.y - ballAvoidWaypoint.y,
+            targetPose.x - ballAvoidWaypoint.x);
+        ballAvoidPhase = 1;
+        log(format("ball avoidance: waypoint=(%.2f, %.2f)",
+            ballAvoidWaypoint.x, ballAvoidWaypoint.y));
+    }
+    Pose2D navigationPose = targetPose;
+    if (ballAvoidPhase == 1) {
+        navigationPose = ballAvoidWaypoint;
+        if (norm(robotPose.x - ballAvoidWaypoint.x,
+                 robotPose.y - ballAvoidWaypoint.y) < 0.35) {
+            ballAvoidPhase = 2;
+            navigationPose = targetPose;
+            log("ball avoidance: reached side waypoint, continue to assist target");
+        }
+    } else if (ballAvoidPhase == 2 &&
+               norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) < distTolerance) {
+        ballAvoidPhase = 0;
+    }
+
+    double dist = norm(navigationPose.x - robotPose.x, navigationPose.y - robotPose.y);
     if ( // 认为到达了目标位置
         dist < distTolerance
-        && fabs(toPInPI(targetPose.theta - robotPose.theta)) < thetaTolerance
+        && fabs(toPInPI(navigationPose.theta - robotPose.theta)) < thetaTolerance
     ) {
         brain->client->setVelocity(0, 0, 0);
         return NodeStatus::SUCCESS;
     }
 
     double vx, vy, vtheta;
-    auto targetPose_r = brain->data->field2robot(targetPose);
+    auto targetPose_r = brain->data->field2robot(navigationPose);
     double targetDir = atan2(targetPose_r.y, targetPose_r.x);
     double distToObstacle = brain->distToObstacle(targetDir);
 
@@ -1311,7 +1362,7 @@ NodeStatus Assist::tick() {
         const double speed = 0.5;
         vx = speed * cos(avoidDir);
         vy = speed * sin(avoidDir);
-        vtheta = toPInPI(targetPose.theta - robotPose.theta);
+        vtheta = toPInPI(navigationPose.theta - robotPose.theta);
     } else {
         vx = targetPose_r.x;
         vy = targetPose_r.y;
@@ -1327,8 +1378,8 @@ NodeStatus Assist::tick() {
      
 
     // Keep the receiving path clear of the ball and live teammates.
-    const double pathDx = targetPose.x - robotPose.x;
-    const double pathDy = targetPose.y - robotPose.y;
+    const double pathDx = navigationPose.x - robotPose.x;
+    const double pathDy = navigationPose.y - robotPose.y;
     const double pathLength2 = pathDx * pathDx + pathDy * pathDy;
     double fieldVx = cos(robotPose.theta) * vx - sin(robotPose.theta) * vy;
     double fieldVy = sin(robotPose.theta) * vx + cos(robotPose.theta) * vy;

@@ -570,7 +570,11 @@ void Brain::pubKickMsg() {
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
     } else if (normalContest && data->tmImLead) {
-        power = ball_x < 0.0 ? 6.0 : 5.0;
+        const double centerCircleBoostRadius =
+            config->fieldDimensions.circleRadius + 1.0;
+        const bool ballNearCenterCircle =
+            std::hypot(ball_x, ball_y) <= centerCircleBoostRadius;
+        power = ballNearCenterCircle ? 6.0 : (ball_x < 0.0 ? 6.0 : 5.0);
     } else if (dist > 6.0) {
         power = 5.0;
     } else {
