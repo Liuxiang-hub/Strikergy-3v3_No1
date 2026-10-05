@@ -5,11 +5,14 @@
 #pragma once
 
 #include <string>
+#include <array>
+#include <cstdint>
 #include <vector>
 #include <numeric>
 #include <iterator>
 #include <limits>
 #include <rclcpp/rclcpp.hpp>
+#include "RoboCupGameControlData.h"
 
 using namespace std;
 
@@ -195,6 +198,29 @@ struct RobotRecoveryStateData {
 };
 
 // 用于存储队友间通讯
+// A compact, transport-safe snapshot of the GameController fields used by Brain.
+// The age is filled by the sender from its own direct GameController reception;
+// a snapshot received from a teammate is never re-advertised as direct data.
+struct SharedGameControlState {
+    bool valid = false;
+    std::uint16_t version = 0;
+    std::uint8_t packetNumber = 0;
+    std::uint8_t state = 0;
+    std::uint8_t gamePhase = 0;
+    std::uint8_t setPlay = 0;
+    std::uint8_t kickOffTeam = 0;
+    std::uint8_t secondaryState = 0;
+    bool stopped = false;
+    std::int16_t secondaryTime = 0;
+    std::array<std::int8_t, 4> secondaryStateInfo{};
+    std::array<std::uint8_t, 2> teamNumber{};
+    std::array<std::uint8_t, 2> goalkeeper{};
+    std::array<std::uint8_t, 2> score{};
+    std::array<std::array<std::uint8_t, HL_MAX_NUM_PLAYERS>, 2> penalty{};
+    std::array<std::array<std::uint8_t, HL_MAX_NUM_PLAYERS>, 2> redCardCount{};
+    std::uint16_t ageMs = 65535;
+};
+
 struct TMStatus {
     string role = "not initialized"; // striker, supporter, keeper
     bool isAlive = false; // 是否在场上, 且没有在罚时中, 且通讯没有丢失
@@ -212,6 +238,8 @@ struct TMStatus {
     int cmd = 0; // 最后一次发出的指令 
     int cmdId = 0; // 最后一次发出的指令 ID
     rclcpp::Time timeLastCom; // 最后一次通讯时间
+    SharedGameControlState gameControl;
+    rclcpp::Time gameControlReceiptTime;
 };
 
 

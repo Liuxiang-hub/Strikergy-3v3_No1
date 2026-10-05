@@ -246,6 +246,10 @@ public:
 
 private:
     void loadConfig();
+    void applyGameControlMessage(
+        const game_controller_interface::msg::GameControlData &msg,
+        int sourcePlayerId);
+    void applyTeammateGameControlFallback();
 
     // 看不见球时, 可以利用记忆中球在 Field 中的位置以及机器人 Odom 信息更新球的相对位置
     void updateBallMemory();

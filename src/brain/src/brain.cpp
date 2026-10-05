@@ -303,11 +303,13 @@ void Brain::init()
     data->timeLastDet = now;
     data->timeLastLineDet = now;
     data->timeLastGamecontrolMsg = now;
+    data->timeLastAppliedGamecontrolMsg = now;
     data->ball.timePoint = now;
 
     for (int i = 0; i < HL_MAX_NUM_PLAYERS; i++) {
         data->tmStatus[i].isAlive = false;
         data->tmStatus[i].timeLastCom = now;
+        data->tmStatus[i].gameControlReceiptTime = now;
     }
     data->tmLastCmdChangeTime = now;
 
@@ -449,6 +451,10 @@ void Brain::tick()
     // main.cpp 中 tick 与 ROS executor 分线程运行；串行化共享 BrainData，避免
     // odometerCallback/calibrateOdom 在同一帧互相覆盖半更新的 Pose2D。
     std::lock_guard<std::recursive_mutex> stateLock(brainStateMutex_);
+
+    // Prefer direct GameController packets. If they stop arriving, consume a
+    // fresh direct snapshot advertised by a teammate before ticking the tree.
+    applyTeammateGameControlFallback();
 
     // 输出 debug & log 相关信息
     logDebugInfo();
@@ -2074,11 +2080,161 @@ void Brain::joystickCallback(const booster_interface::msg::RemoteControllerState
     }
 }
 
+namespace
+{
+SharedGameControlState makeSharedGameControlState(
+    const game_controller_interface::msg::GameControlData &msg)
+{
+    SharedGameControlState state;
+    state.valid = true;
+    state.version = msg.version;
+    state.packetNumber = msg.packet_number;
+    state.state = msg.state;
+    state.gamePhase = msg.game_phase;
+    state.setPlay = msg.set_play;
+    state.kickOffTeam = msg.kick_off_team;
+    state.secondaryState = msg.secondary_state;
+    state.stopped = msg.stopped;
+    state.secondaryTime = msg.secondary_time;
+    for (std::size_t i = 0; i < state.secondaryStateInfo.size(); ++i)
+        state.secondaryStateInfo[i] = msg.secondary_state_info[i];
+    for (std::size_t team = 0; team < state.teamNumber.size(); ++team) {
+        const auto &teamInfo = msg.teams[team];
+        state.teamNumber[team] = teamInfo.team_number;
+        state.goalkeeper[team] = teamInfo.goalkeeper;
+        state.score[team] = teamInfo.score;
+        const std::size_t playerCount = std::min<std::size_t>(
+            HL_MAX_NUM_PLAYERS, teamInfo.players.size());
+        for (std::size_t player = 0; player < playerCount; ++player) {
+            state.penalty[team][player] = teamInfo.players[player].penalty;
+            state.redCardCount[team][player] = teamInfo.players[player].red_card_count;
+        }
+    }
+    state.ageMs = 0;
+    return state;
+}
+
+game_controller_interface::msg::GameControlData makeGameControlMessage(
+    const SharedGameControlState &state)
+{
+    game_controller_interface::msg::GameControlData msg;
+    msg.version = state.version;
+    msg.packet_number = state.packetNumber;
+    msg.state = state.state;
+    msg.game_phase = state.gamePhase;
+    msg.set_play = state.setPlay;
+    msg.kick_off_team = state.kickOffTeam;
+    msg.secondary_state = state.secondaryState;
+    msg.stopped = state.stopped;
+    msg.secondary_time = state.secondaryTime;
+    for (std::size_t i = 0; i < state.secondaryStateInfo.size(); ++i)
+        msg.secondary_state_info[i] = state.secondaryStateInfo[i];
+    for (std::size_t team = 0; team < state.teamNumber.size(); ++team) {
+        auto &teamInfo = msg.teams[team];
+        teamInfo.team_number = state.teamNumber[team];
+        teamInfo.goalkeeper = state.goalkeeper[team];
+        teamInfo.score = state.score[team];
+        teamInfo.players.resize(HL_MAX_NUM_PLAYERS);
+        for (std::size_t player = 0; player < HL_MAX_NUM_PLAYERS; ++player) {
+            teamInfo.players[player].penalty = state.penalty[team][player];
+            teamInfo.players[player].red_card_count = state.redCardCount[team][player];
+        }
+    }
+    return msg;
+}
+} // namespace
+
 void Brain::gameControlCallback(const game_controller_interface::msg::GameControlData &msg)
 {
     std::lock_guard<std::recursive_mutex> stateLock(brainStateMutex_);
 
-    data->timeLastGamecontrolMsg = get_clock()->now();
+    const auto now = get_clock()->now();
+    const bool wasUsingTeammate = data->usingTeammateGameControl;
+    data->timeLastGamecontrolMsg = now;
+    data->timeLastAppliedGamecontrolMsg = now;
+    {
+        std::lock_guard<std::mutex> lock(data->gameControlShareMutex);
+        data->localGameControl = makeSharedGameControlState(msg);
+    }
+    data->usingTeammateGameControl = false;
+    data->gameControlSourcePlayerId = 0;
+    data->lastAppliedTeammateGameControlId = -1;
+    if (wasUsingTeammate) {
+        RCLCPP_INFO(get_logger(),
+                    "[gc_share] direct GameController reception restored");
+    }
+    applyGameControlMessage(msg, 0);
+}
+
+void Brain::applyTeammateGameControlFallback()
+{
+    constexpr double LOCAL_TIMEOUT_MS = 1000.0;
+    constexpr double TEAM_PACKET_TIMEOUT_MS = 500.0;
+    constexpr double SHARED_STATE_MAX_AGE_MS = 1500.0;
+
+    if (msecsSince(data->timeLastGamecontrolMsg) <= LOCAL_TIMEOUT_MS)
+        return;
+
+    SharedGameControlState selected;
+    int selectedPlayerId = -1;
+    double selectedAgeMs = std::numeric_limits<double>::infinity();
+    {
+        std::lock_guard<std::mutex> lock(data->gameControlShareMutex);
+        const int playerCount = std::clamp(config->numOfPlayers, 1, HL_MAX_NUM_PLAYERS);
+        for (int i = 0; i < playerCount; ++i) {
+            if (i == config->playerId - 1)
+                continue;
+            const auto &status = data->tmStatus[i];
+            const double teamPacketAgeMs = msecsSince(status.gameControlReceiptTime);
+            const double effectiveAgeMs =
+                teamPacketAgeMs + static_cast<double>(status.gameControl.ageMs);
+            if (!status.gameControl.valid ||
+                teamPacketAgeMs > TEAM_PACKET_TIMEOUT_MS ||
+                effectiveAgeMs > SHARED_STATE_MAX_AGE_MS)
+                continue;
+            if (effectiveAgeMs < selectedAgeMs) {
+                selected = status.gameControl;
+                selectedPlayerId = i + 1;
+                selectedAgeMs = effectiveAgeMs;
+            }
+        }
+    }
+
+    if (selectedPlayerId < 0) {
+        if (data->usingTeammateGameControl) {
+            RCLCPP_WARN(get_logger(),
+                        "[gc_share] teammate GameController fallback expired");
+            data->usingTeammateGameControl = false;
+            data->gameControlSourcePlayerId = -1;
+        }
+        return;
+    }
+
+    if (data->usingTeammateGameControl &&
+        data->lastAppliedTeammateGameControlId == selectedPlayerId &&
+        data->lastAppliedTeammateGameControlPacket == selected.packetNumber)
+        return;
+
+    const bool sourceChanged = !data->usingTeammateGameControl ||
+        data->lastAppliedTeammateGameControlId != selectedPlayerId;
+    data->usingTeammateGameControl = true;
+    data->gameControlSourcePlayerId = selectedPlayerId;
+    data->lastAppliedTeammateGameControlId = selectedPlayerId;
+    data->lastAppliedTeammateGameControlPacket = selected.packetNumber;
+    data->timeLastAppliedGamecontrolMsg = get_clock()->now();
+    if (sourceChanged) {
+        RCLCPP_WARN(get_logger(),
+                    "[gc_share] local GameController timed out; using player %d "
+                    "snapshot (effective age %.0f ms)",
+                    selectedPlayerId, selectedAgeMs);
+    }
+    applyGameControlMessage(makeGameControlMessage(selected), selectedPlayerId);
+}
+
+void Brain::applyGameControlMessage(
+    const game_controller_interface::msg::GameControlData &msg,
+    int sourcePlayerId)
+{
     communication->setGameControllerProtocolVersion(msg.version);
     tree->setEntry<bool>("gc_play_stopped", msg.stopped);
     tree->setEntry<int>("gc_set_play", static_cast<int>(msg.set_play));
@@ -2218,8 +2374,9 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
         penaltyKickActive && !isSubStateKickOffSide);
     RCLCPP_INFO(
         get_logger(),
-        "[kickoff_gc] packet=%u protocol=%u raw_state=%u stopped=%d phase=%u set_play=%u "
+        "[kickoff_gc] source=%s packet=%u protocol=%u raw_state=%u stopped=%d phase=%u set_play=%u "
         "kickoff_team=%u secondary_time=%d mapped_state=%s subtype=%s real=%s",
+        sourcePlayerId == 0 ? "local" : format("player%d", sourcePlayerId).c_str(),
         static_cast<unsigned>(msg.packet_number),
         static_cast<unsigned>(msg.version),
         static_cast<unsigned>(msg.state),
@@ -4119,7 +4276,10 @@ void Brain::logLowFrequencyDiagnostics(const rclcpp::Time &now)
            << " control_state=" << controlState
            << " decision=" << decision << "\n";
         ss << "kickoff_diag protocol=" << tree->getEntry<int>("gc_protocol_version")
-           << " gc_age_ms=" << std::setprecision(0) << msecsSince(data->timeLastGamecontrolMsg)
+           << " gc_local_age_ms=" << std::setprecision(0) << msecsSince(data->timeLastGamecontrolMsg)
+           << " gc_applied_age_ms=" << msecsSince(data->timeLastAppliedGamecontrolMsg)
+           << " gc_source=" << (data->gameControlSourcePlayerId == 0
+               ? "local" : "player" + std::to_string(data->gameControlSourcePlayerId))
            << " secondary_time=" << tree->getEntry<int>("gc_secondary_time")
            << " stopped=" << (tree->getEntry<bool>("gc_play_stopped") ? 1 : 0)
            << " kickoff_side=" << (tree->getEntry<bool>("gc_is_kickoff_side") ? 1 : 0)
@@ -4363,7 +4523,7 @@ void Brain::logLags() {
     );
 
     // log game control delay
-    double gcLag = msecsSince(data->timeLastGamecontrolMsg);
+    double gcLag = msecsSince(data->timeLastAppliedGamecontrolMsg);
     if (gcLag > 5000) color = 0xFF0000FF;
     else if (gcLag > 1000) color = 0xFFFF00FF;
     else color = 0x00FF00FF;
@@ -4390,7 +4550,7 @@ void Brain::statusReport() {
     static string lastReport = "";
     string report;
     bool camOK = msecsSince(data->timeLastDet) < 1000;
-    bool gcOK = msecsSince(data->timeLastGamecontrolMsg) < 1000;
+    bool gcOK = msecsSince(data->timeLastAppliedGamecontrolMsg) < 1000;
 
     if (camOK && gcOK) {
         report = "Team" + to_string(config->teamId) + " Player " + to_string(config->playerId) + " " + tree->getEntry<string>("player_role") + " " + " OK";

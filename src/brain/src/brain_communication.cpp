@@ -1,6 +1,7 @@
 #include "brain.h"
 #include "brain_communication.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -199,6 +200,15 @@ void BrainCommunication::broadcastTeamCommunication()
         msg.thetaRb = ballLocationKnown ? brain->data->robotBallAngleToField : 0.0;
         msg.cmdId = brain->data->tmMyCmdId;
         msg.cmd = brain->data->tmMyCmd;
+        {
+            std::lock_guard<std::mutex> lock(brain->data->gameControlShareMutex);
+            msg.gameControl = brain->data->localGameControl;
+            if (msg.gameControl.valid) {
+                const double age = brain->msecsSince(brain->data->timeLastGamecontrolMsg);
+                msg.gameControl.ageMs = static_cast<std::uint16_t>(
+                    std::clamp(age, 0.0, 65535.0));
+            }
+        }
         log(format("ImAlive: %d, ImLead: %d, myCost: %.1f, myCmdId: %d, myCmd: %d",
                     msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd));
 
@@ -226,6 +236,8 @@ void BrainCommunication::spinTeamCommunicationReceiver()
     socklen_t addrLen = sizeof(addr);
     TeamCommunicationMsg msg{};
     std::array<unsigned char, 256> packet{};
+    static_assert(sizeof(TeamCommunicationMsg) <= 256,
+                  "team communication packet exceeds receiver buffer");
 
     while (_team_communication_flag.load())
     {
@@ -246,6 +258,7 @@ void BrainCommunication::spinTeamCommunicationReceiver()
         }
         if (len != static_cast<ssize_t>(TEAM_COMMUNICATION_LEGACY_SIZE) &&
             len != static_cast<ssize_t>(sizeof(TeamCommunicationMsg)) &&
+            len != static_cast<ssize_t>(sizeof(TeamCommunicationMsgV2)) &&
             len != static_cast<ssize_t>(sizeof(TeamCommunicationMsgInsertedV1)))
             continue;
 
@@ -279,6 +292,15 @@ void BrainCommunication::spinTeamCommunicationReceiver()
         else if (len == static_cast<ssize_t>(sizeof(TeamCommunicationMsg)) &&
                  validation == VALIDATION_COMMUNICATION)
             std::memcpy(&msg, packet.data(), sizeof(msg));
+        else if (len == static_cast<ssize_t>(sizeof(TeamCommunicationMsgV2)) &&
+                 validation == VALIDATION_COMMUNICATION_V2)
+        {
+            TeamCommunicationMsgV2 v2{};
+            std::memcpy(&v2, packet.data(), sizeof(v2));
+            std::memcpy(&msg, &v2, sizeof(v2));
+            msg.validation = VALIDATION_COMMUNICATION;
+            msg.gameControl = SharedGameControlState{};
+        }
         else if (len == static_cast<ssize_t>(sizeof(TeamCommunicationMsgInsertedV1)) &&
                  validation == VALIDATION_COMMUNICATION_LEGACY)
         {
@@ -341,6 +363,11 @@ void BrainCommunication::spinTeamCommunicationReceiver()
         tmStatus.timeLastCom = brain->get_clock()->now();
         tmStatus.cmd = msg.cmd;
         tmStatus.cmdId = msg.cmdId;
+        {
+            std::lock_guard<std::mutex> lock(brain->data->gameControlShareMutex);
+            tmStatus.gameControl = msg.gameControl;
+            tmStatus.gameControlReceiptTime = brain->get_clock()->now();
+        }
         if (msg.cmdId > brain->data->tmCmdId)
         {
             brain->data->tmCmdId = msg.cmdId;

@@ -4,7 +4,8 @@
 #include "types.h"
 
 #define VALIDATION_COMMUNICATION_LEGACY 31202
-#define VALIDATION_COMMUNICATION 31203
+#define VALIDATION_COMMUNICATION_V2 31203
+#define VALIDATION_COMMUNICATION 31204
 struct TeamCommunicationMsg
 {
     int validation = VALIDATION_COMMUNICATION; // validate msg, to determine if it's sent by us.
@@ -27,6 +28,8 @@ struct TeamCommunicationMsg
     int cmd; // 百位为 1 时, 代表自己要球控球. 十位为 1 时, 代表守门员要求另一个球员接替守门员角色, 此时个位数字代表接替球员的 playerId. 例如: 100, 代表自己要球控球, 另一个 striker 进入辅助角色; 011, 代表守门员要出击, 要求 1 号球员接替守门.  
     // 新字段只能追加在旧包末尾，不能插到中间破坏 120 字节旧协议的字段偏移。
     bool isInVisualKick; // 是否正在执行视觉踢球
+    std::uint8_t reservedV2Padding[7]{}; // preserve the complete 128-byte v2 packet prefix
+    SharedGameControlState gameControl; // 本机直接收到的裁判机状态（不转发队友兜底值）
 };
 
 constexpr std::size_t TEAM_COMMUNICATION_LEGACY_SIZE =
@@ -59,6 +62,34 @@ struct TeamCommunicationMsgLegacy
 };
 static_assert(sizeof(TeamCommunicationMsgLegacy) == TEAM_COMMUNICATION_LEGACY_SIZE,
               "legacy team packet layout changed");
+
+// Protocol 31203 packet used before GameController state sharing was added.
+struct TeamCommunicationMsgV2
+{
+    int validation = VALIDATION_COMMUNICATION_V2;
+    int communicationId;
+    int teamId;
+    int playerId;
+    int playerRole;
+    bool isAlive;
+    bool isLead;
+    bool ballDetected;
+    bool ballLocationKnown;
+    double ballConfidence;
+    double ballRange;
+    double cost;
+    Point ballPosToField;
+    Pose2D robotPoseToField;
+    double kickDir;
+    double thetaRb;
+    int cmdId;
+    int cmd;
+    bool isInVisualKick;
+};
+static_assert(sizeof(TeamCommunicationMsgV2) == 128,
+              "protocol 31203 team packet layout changed");
+static_assert(offsetof(TeamCommunicationMsg, gameControl) == sizeof(TeamCommunicationMsgV2),
+              "new team packet fields must remain append-only");
 
 // 兼容本次迁移早期生成过的 128 字节过渡包：isInVisualKick 曾被插在 bool 字段中间。
 // 仅用于网络解码/滚动升级，新的发送端使用上面的可追加布局。

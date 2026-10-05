@@ -188,6 +188,13 @@ public:
     rclcpp::Time timeLastLineDet; // 上次收到 FieldLine Detection 消息的时间戳时间
     rclcpp::Time lastSuccessfulLocalizeTime;
     rclcpp::Time timeLastGamecontrolMsg; // 上次收到 Gamecontrol 消息的时间戳时间
+    rclcpp::Time timeLastAppliedGamecontrolMsg; // 本机或队友兜底状态最近一次生效的时间
+    SharedGameControlState localGameControl; // 仅保存本机直接收到的数据，禁止回传兜底数据
+    bool usingTeammateGameControl = false;
+    int gameControlSourcePlayerId = 0; // 0=本机，其他值=提供兜底状态的队友编号
+    int lastAppliedTeammateGameControlId = -1;
+    std::uint8_t lastAppliedTeammateGameControlPacket = 0;
+    std::mutex gameControlShareMutex;
     rclcpp::Time timeLastLogSave; // 上次日志记录到文件的时间, 用于防止日志太大, 读的时候死机
     VisionBox visionBox;  
     rclcpp::Time lastTick; 
