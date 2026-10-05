@@ -554,9 +554,17 @@ void Brain::pubKickMsg() {
     double dist = std::sqrt((goal_x - ball_x) * (goal_x - ball_x) + (goal_y - ball_y) * (goal_y - ball_y));
     dist = std::abs(dist);
     double power = 0.0;
+    const string gameState = tree->getEntry<string>("gc_game_state");
+    const string realGameSubState = tree->getEntry<string>("gc_real_game_sub_state");
+    const bool normalContest =
+        gameState == "PLAY" &&
+        !tree->getEntry<bool>("gc_kickoff_active") &&
+        (realGameSubState == "NONE" || realGameSubState == "OVERTIME");
 
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
+    } else if (normalContest && data->tmImLead) {
+        power = ball_x < 0.0 ? 6.0 : 5.0;
     } else if (dist > 6.0) {
         power = 5.0;
     } else {
