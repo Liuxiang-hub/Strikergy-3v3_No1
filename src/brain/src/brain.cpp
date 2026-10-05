@@ -1135,6 +1135,34 @@ void Brain::updateObstacleMemory() {
         obs_new.push_back(data->ball);
     }
 
+    // READY 阶段按照编号建立单向让行：1 号避让 2、3 号，2 号避让 3 号。
+    // 队友位置来自 team communication，因此即使相机没有识别出队友，也能参与避障。
+    // 只接受新鲜的在场队友数据，避免用断连后的旧位置制造虚假障碍。
+    if (tree->getEntry<string>("gc_game_state") == "READY") {
+        constexpr double TEAMMATE_POSITION_TIMEOUT_MS = 500.0;
+        const int selfId = config->playerId;
+        const int playerCount = std::clamp(config->numOfPlayers, 1, HL_MAX_NUM_PLAYERS);
+        for (int teammateId = selfId + 1; teammateId <= playerCount; ++teammateId) {
+            const auto &teammate = data->tmStatus[teammateId - 1];
+            if (!teammate.isAlive ||
+                msecsSince(teammate.timeLastCom) > TEAMMATE_POSITION_TIMEOUT_MS ||
+                !std::isfinite(teammate.robotPoseToField.x) ||
+                !std::isfinite(teammate.robotPoseToField.y)) {
+                continue;
+            }
+
+            GameObject teammateObstacle;
+            teammateObstacle.label = "Teammate";
+            teammateObstacle.name = format("teammate_%d", teammateId);
+            teammateObstacle.confidence = 100.0;
+            teammateObstacle.posToField.x = teammate.robotPoseToField.x;
+            teammateObstacle.posToField.y = teammate.robotPoseToField.y;
+            teammateObstacle.timePoint = get_clock()->now();
+            updateRelativePos(teammateObstacle);
+            obs_new.push_back(teammateObstacle);
+        }
+    }
+
     data->setObstacles(obs_new);
     logObstacles();
 }
