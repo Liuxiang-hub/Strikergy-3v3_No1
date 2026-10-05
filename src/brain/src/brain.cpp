@@ -973,52 +973,97 @@ void Brain::handleCooperation() {
     struct BallOwnerCandidate {
         int id = 0;
         double cost = 1e9;
-        bool visualKick = false;
+        double rawDistance = 1e9;
+        double facingScore = 1.0;
+        bool fallen = false;
     };
     vector<BallOwnerCandidate> ownerCandidates;
-    const double goalieClaimBallX = -config->fieldDimensions.circleRadius - 2.0;
     const string selfRole = tree->getEntry<string>("player_role");
-    const bool selfGoalieClaimsBall =
-        selfRole == "keeper" &&
-        (data->tmImInVisualKick ||
-         (data->ballDetected && !data->lose_ball && std::isfinite(data->ball.range) &&
-          data->ball.range < 1.5 && data->ball.posToField.x < goalieClaimBallX));
-    if (selfRole == "striker" || selfRole == "supporter" || selfGoalieClaimsBall) {
-        ownerCandidates.push_back({selfId, data->tmMyCost, data->tmImInVisualKick});
+    const string gameStateForOwner = tree->getEntry<string>("gc_game_state");
+    const string realSubStateForOwner = tree->getEntry<string>("gc_real_game_sub_state");
+    const bool normalOwnerPhase =
+        gameStateForOwner == "PLAY" &&
+        !tree->getEntry<bool>("gc_kickoff_active") &&
+        (realSubStateForOwner == "NONE" || realSubStateForOwner == "OVERTIME");
+    const double opponentGoalX = config->fieldDimensions.length / 2.0;
+    auto makeCandidate = [&](int id, const Pose2D &pose, const Point &ballPos,
+                             bool seesBall, bool fallen, double fallbackCost) {
+        BallOwnerCandidate candidate;
+        candidate.id = id;
+        candidate.rawDistance = norm(ballPos.x - pose.x, ballPos.y - pose.y);
+        candidate.fallen = fallen;
+        candidate.facingScore = std::abs(toPInPI(
+            std::atan2(-pose.y, opponentGoalX - pose.x) - pose.theta)) / M_PI;
+        candidate.cost = fallbackCost;
+        if (normalOwnerPhase && seesBall) {
+            const double effectiveDistance = candidate.rawDistance + (fallen ? 11.0 : 0.0);
+            candidate.cost = 0.9 * (effectiveDistance / 5.0) +
+                0.1 * candidate.facingScore;
+        }
+        return candidate;
+    };
+    if (selfRole == "striker" || selfRole == "supporter") {
+        const bool eligible = normalOwnerPhase ? data->ballDetected :
+            (data->ballDetected || tree->getEntry<bool>("ball_location_known"));
+        if (eligible) {
+            ownerCandidates.push_back(makeCandidate(
+                selfId, data->robotPoseToField, data->ball.posToField,
+                data->ballDetected,
+                data->recoveryState != RobotRecoveryState::IS_READY,
+                data->tmMyCost));
+        }
     }
     for (int tmIdx : aliveTmIdxs) {
         const auto &tm = data->tmStatus[tmIdx];
-        const bool teammateGoalieClaimsBall =
-            tm.role == "keeper" &&
-            (tm.isInVisualKick ||
-             (tm.ballDetected && std::isfinite(tm.ballRange) && tm.ballRange < 1.5 &&
-              tm.ballPosToField.x < goalieClaimBallX));
-        if (tm.role == "striker" || tm.role == "supporter" || teammateGoalieClaimsBall) {
-            ownerCandidates.push_back({tmIdx + 1,
-                std::isfinite(tm.cost) ? tm.cost : 1e9,
-                tm.isInVisualKick});
+        if (tm.role == "striker" || tm.role == "supporter") {
+            const bool eligible = normalOwnerPhase ? tm.ballDetected :
+                (tm.ballDetected || tm.ballLocationKnown);
+            if (eligible) {
+                ownerCandidates.push_back(makeCandidate(
+                    tmIdx + 1, tm.robotPoseToField, tm.ballPosToField,
+                    tm.ballDetected, false,
+                    std::isfinite(tm.cost) ? tm.cost : 1e9));
+            }
         }
     }
-    if (ownerCandidates.empty() && data->tmImAlive) {
-        ownerCandidates.push_back({selfId, data->tmMyCost, data->tmImInVisualKick});
+    if (ownerCandidates.empty() && data->tmImAlive && !normalOwnerPhase) {
+        ownerCandidates.push_back({selfId, data->tmMyCost, 1e9, 1.0, false});
     }
 
-    auto betterOwner = [](const BallOwnerCandidate &lhs, const BallOwnerCandidate &rhs) {
-        return lhs.cost < rhs.cost - COST_TIE_EPS ||
-            (std::fabs(lhs.cost - rhs.cost) <= COST_TIE_EPS && lhs.id < rhs.id);
+    auto betterOwner = [&](const BallOwnerCandidate &lhs, const BallOwnerCandidate &rhs) {
+        if (normalOwnerPhase) {
+            return lhs.cost < rhs.cost - COST_TIE_EPS ||
+                (std::fabs(lhs.cost - rhs.cost) <= COST_TIE_EPS && lhs.id < rhs.id);
+        }
+        return lhs.rawDistance < rhs.rawDistance - COST_TIE_EPS ||
+            (std::fabs(lhs.rawDistance - rhs.rawDistance) <= COST_TIE_EPS && lhs.id < rhs.id);
     };
     BallOwnerCandidate bestOwner;
-    BallOwnerCandidate activeVisualKickOwner;
     for (const auto &candidate : ownerCandidates) {
         if (bestOwner.id == 0 || betterOwner(candidate, bestOwner)) bestOwner = candidate;
-        if (candidate.visualKick &&
-            (activeVisualKickOwner.id == 0 || betterOwner(candidate, activeVisualKickOwner))) {
-            activeVisualKickOwner = candidate;
-        }
     }
-    const int ownerId = activeVisualKickOwner.id > 0
-        ? activeVisualKickOwner.id
-        : bestOwner.id;
+    static int normalAttackerId = 0;
+    int ownerId = bestOwner.id;
+    if (normalOwnerPhase) {
+        constexpr double ATTACKER_KEEP_DIST_MARGIN_M = 0.3;
+        constexpr double FACING_FORCE_SWITCH_MARGIN = 0.4;
+        const BallOwnerCandidate *previous = nullptr;
+        for (const auto &candidate : ownerCandidates) {
+            if (candidate.id == normalAttackerId) {
+                previous = &candidate;
+                break;
+            }
+        }
+        if (previous != nullptr && bestOwner.id != previous->id) {
+            const bool keepPrevious =
+                previous->rawDistance <= bestOwner.rawDistance + ATTACKER_KEEP_DIST_MARGIN_M &&
+                !(bestOwner.facingScore < previous->facingScore - FACING_FORCE_SWITCH_MARGIN);
+            if (keepPrevious) ownerId = previous->id;
+        }
+        normalAttackerId = ownerId;
+    } else {
+        normalAttackerId = 0;
+    }
     data->tmImLead = data->tmImAlive && ownerId == selfId;
     tree->setEntry<bool>("is_lead", data->tmImLead);
     log_(format("ball owner: %d, myCost: %.1f, myCostRank: %d, myStrikerCostRank: %d, kickoffGroupRank: %d, myStrikerIDRank: %d",
