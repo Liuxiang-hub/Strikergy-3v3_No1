@@ -32,7 +32,7 @@ brain_node:
       ball_lost_msecs: 1000.0
       tm_ball_dist_threshold: 1.5  
       limit_near_ball_speed: false 
-      near_ball_speed_limit: 0.6 
+      near_ball_speed_limit: 0.5 
       near_ball_range: 2.0 
       soft_kickoff: true          # 所有开球(比赛开球/任意球/角球/门球)均用软速度，降低出界/失误风险
       soft_kickoff_speed: 0.3
