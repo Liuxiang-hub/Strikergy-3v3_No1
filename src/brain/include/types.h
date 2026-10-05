@@ -12,7 +12,6 @@
 #include <iterator>
 #include <limits>
 #include <rclcpp/rclcpp.hpp>
-#include "RoboCupGameControlData.h"
 
 using namespace std;
 
@@ -202,6 +201,8 @@ struct RobotRecoveryStateData {
 // A compact, transport-safe snapshot of the GameController fields used by Brain.
 // The age is filled by the sender from its own direct GameController reception;
 // a snapshot received from a teammate is never re-advertised as direct data.
+constexpr std::size_t SHARED_GAMECONTROL_PLAYER_COUNT = 11;
+
 struct SharedGameControlState {
     bool valid = false;
     std::uint16_t version = 0;
@@ -217,8 +218,8 @@ struct SharedGameControlState {
     std::array<std::uint8_t, 2> teamNumber{};
     std::array<std::uint8_t, 2> goalkeeper{};
     std::array<std::uint8_t, 2> score{};
-    std::array<std::array<std::uint8_t, HL_MAX_NUM_PLAYERS>, 2> penalty{};
-    std::array<std::array<std::uint8_t, HL_MAX_NUM_PLAYERS>, 2> redCardCount{};
+    std::array<std::array<std::uint8_t, SHARED_GAMECONTROL_PLAYER_COUNT>, 2> penalty{};
+    std::array<std::array<std::uint8_t, SHARED_GAMECONTROL_PLAYER_COUNT>, 2> redCardCount{};
     std::uint16_t ageMs = 65535;
 };
 
