@@ -1803,6 +1803,16 @@ NodeStatus StrikerDecide::tick() {
     log(format("kickValue: %.1f, threatLevel: %.1f", kickValue, threatLevel));
 
     const auto &fieldDimensions = brain->config->fieldDimensions;
+    const bool normalContestPlay =
+        brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        (brain->data->realGameSubState == "NONE" ||
+         brain->data->realGameSubState == "OVERTIME");
+    const double centerCircleBoostRadius = fieldDimensions.circleRadius + 1.0;
+    const bool forceRegularKickOutsideCenter =
+        normalContestPlay &&
+        ball.posToField.x > 0.0 &&
+        std::hypot(ball.posToField.x, ball.posToField.y) > centerCircleBoostRadius;
     const bool ballInOpponentPenaltyArea =
         ball.posToField.x >= fieldDimensions.length / 2.0 - fieldDimensions.penaltyAreaLength &&
         ball.posToField.x <= fieldDimensions.length / 2.0 &&
@@ -1817,6 +1827,7 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentPenaltyArea &&
+        !forceRegularKickOutsideCenter &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
@@ -1844,6 +1855,7 @@ NodeStatus StrikerDecide::tick() {
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
         !ballInOpponentPenaltyArea &&
+        !forceRegularKickOutsideCenter &&
         !powerShootPossible &&
         brain->data->tmMyCost < 7.0 &&
         ballRange < autoVisualKickEnableDistMax &&
@@ -1879,6 +1891,12 @@ NodeStatus StrikerDecide::tick() {
     )
     {
         if (brain->data->kickType == "cross") newDecision = "cross";
+        else if (forceRegularKickOutsideCenter) {
+            newDecision = "kick";
+            log(format(
+                "experimental regular kick: opponent half outside center-circle boost radius %.2f",
+                centerCircleBoostRadius));
+        }
         else if (powerShootPossible) newDecision = "power_kick";
         else { // kickType == kick
             double threatThreshold;
