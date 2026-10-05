@@ -69,6 +69,17 @@ private:
     Brain *brain;
 };
 
+class CornerPassState : public SyncActionNode
+{
+public:
+    CornerPassState(const string &name, const NodeConfig &config, Brain *_brain)
+        : SyncActionNode(name, config), brain(_brain) {}
+    static PortsList providedPorts() { return {}; }
+    NodeStatus tick() override;
+private:
+    Brain *brain;
+};
+
 class StrikerDecide : public SyncActionNode
 {
 public:

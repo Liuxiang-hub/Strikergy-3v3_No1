@@ -569,6 +569,12 @@ void Brain::pubKickMsg() {
 
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
+    } else if (data->cornerPassPhase == 1 &&
+               tree->getEntry<string>("player_role") == "supporter") {
+        power = 3.0;
+    } else if (data->cornerPassPhase == 2 &&
+               tree->getEntry<string>("player_role") == "striker") {
+        power = 6.0;
     } else if (normalContest && data->tmImLead) {
         const double centerCircleBoostRadius =
             config->fieldDimensions.circleRadius + 1.0;
@@ -2455,6 +2461,11 @@ void Brain::applyGameControlMessage(
     tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
     tree->setEntry<string>("gc_game_sub_state", gameSubState);
     tree->setEntry<string>("gc_real_game_sub_state", data->realGameSubState);
+    if (data->realGameSubState != "CORNER_KICK" || gameState != "PLAY") {
+        data->cornerPassPhase = 0;
+        data->cornerPassStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        tree->setEntry<int>("corner_pass_phase", 0);
+    }
     tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
     const bool penaltyKickActive = gameState == "PLAY" &&
         (data->realGameSubState == "PENALTY_KICK" ||

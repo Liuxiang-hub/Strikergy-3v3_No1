@@ -142,6 +142,10 @@ int RobotClient::RLVisionKick(bool start)
     } else if (verLower == "kv2" || verLower == "v2") {
         visualKickVersion = 1;
     }
+    if (start && brain->data->cornerPassPhase == 1 &&
+        brain->tree->getEntry<string>("player_role") == "supporter") {
+        visualKickVersion = 0;
+    }
     body["version"] = visualKickVersion;
     msg.body = body.dump();
     std::cout << "RobotClient::RLVisionKick called with start=" << (start ? "true" : "false") << std::endl;

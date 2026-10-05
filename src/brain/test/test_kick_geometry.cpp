@@ -66,5 +66,14 @@ int main()
     ok &= expectNear("right sideline set play turns inward",
                      directionForIndirectSetPlay(2.0, -6.0, 11.0, 14.0), kPi / 2.0);
 
+    ok &= expectTrue("upper opponent corner",
+                     isOpponentCorner(10.5, 6.5, 22.0, 14.0));
+    ok &= expectTrue("lower opponent corner",
+                     isOpponentCorner(10.5, -6.5, 22.0, 14.0));
+    ok &= expectFalse("opponent sideline away from corner",
+                      isOpponentCorner(4.0, 6.5, 22.0, 14.0));
+    ok &= expectFalse("own corner",
+                      isOpponentCorner(-10.5, 6.5, 22.0, 14.0));
+
     return ok ? 0 : 1;
 }
