@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 
 
@@ -21,4 +22,29 @@ for branch in (own, opponent):
     assert branch.find("./SubTree[@ID='GoalKeeperPlay']") is not None
 
 assert goal_kick.find("./ReactiveSequence/SetVelocity") is not None
+
+game = ET.parse(Path(__file__).parents[1] / "behavior_trees/game.xml")
+entry = next(node for node in game.getroot().iter("SubTree")
+             if node.get("ID") == "GoalKick")
+parent = next(node for node in game.getroot().iter("ReactiveSequence")
+              if entry in list(node))
+condition = parent.get("_while", "")
+
+
+def routed(kind, real, playing=True, penalty=False):
+    expression = condition.replace("&&", " and ").replace("||", " or ")
+    expression = re.sub(r"!(?!=)", " not ", expression)
+    return eval(expression, {"__builtins__": {}}, {
+        "gc_game_state": "PLAY" if playing else "SET",
+        "penalty_kick_active": penalty,
+        "gc_game_sub_state_type": kind,
+        "gc_real_game_sub_state": real,
+    })
+
+
+assert routed("NONE", "GOAL_KICK")  # v20 own kick after release
+assert routed("FREE_KICK", "GOAL_KICK")  # legacy set play
+assert not routed("NONE", "NONE")
+assert not routed("NONE", "GOAL_KICK", playing=False)
+assert not routed("NONE", "GOAL_KICK", penalty=True)
 print("GoalKick subtree guards and role paths OK")

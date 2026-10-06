@@ -101,7 +101,7 @@
                         <SubTree ID="PenaltyKick" _autoremap="true" />
                     </ReactiveSequence>
 
-                    <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_state=='PLAY' &amp;&amp; !penalty_kick_active" name="开任意球">
+                    <ReactiveSequence _while="gc_game_state=='PLAY' &amp;&amp; !penalty_kick_active &amp;&amp; (gc_game_sub_state_type=='FREE_KICK' || (gc_game_sub_state_type=='NONE' &amp;&amp; gc_real_game_sub_state!='NONE' &amp;&amp; gc_real_game_sub_state!='OVERTIME'))" name="开任意球">
                         <SubTree ID="DirectFreeKick" _autoremap="true"
                             _while="gc_real_game_sub_state=='DIRECT_FREEKICK'" />
                         <SubTree ID="IndirectFreeKick" _autoremap="true"
