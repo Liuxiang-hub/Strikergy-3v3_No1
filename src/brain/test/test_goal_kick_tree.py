@@ -14,11 +14,17 @@ branches = goal_kick.findall("./ReactiveSequence/ReactiveSequence")
 own = next(b for b in branches if "gc_game_sub_state_type=='NONE'" in b.get("_while", "")
            and "!gc_is_sub_state_kickoff_side" not in b.get("_while", ""))
 opponent = next(b for b in branches if "!gc_is_sub_state_kickoff_side" in b.get("_while", ""))
+field_player = own.find("./ReactiveSequence")
+assert field_player is not None
+assert "striker" in field_player.get("_while", "")
+assert "supporter" in field_player.get("_while", "")
+assert field_player.find("./SubTree[@ID='StrikerPlay']") is None
+for action in ("StrikerDecide", "Chase", "Adjust", "RLVisionKick"):
+    assert any(node.tag == action for node in field_player.iter())
+
+field_player = opponent.find("./SubTree[@ID='StrikerPlay']")
+assert field_player is not None
 for branch in (own, opponent):
-    field_player = branch.find("./SubTree[@ID='StrikerPlay']")
-    assert field_player is not None
-    assert "striker" in field_player.get("_while", "")
-    assert "supporter" in field_player.get("_while", "")
     assert branch.find("./SubTree[@ID='GoalKeeperPlay']") is not None
 
 assert goal_kick.find("./ReactiveSequence/SetVelocity") is not None

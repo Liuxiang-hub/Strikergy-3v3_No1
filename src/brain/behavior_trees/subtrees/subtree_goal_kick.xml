@@ -1,17 +1,41 @@
 <root BTCPP_format="4">
+    <include path="./subtree_cam_find_and_track_ball.xml" />
+    <include path="./subtree_locate.xml" />
     <BehaviorTree ID="GoalKick">
         <ReactiveSequence>
             <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_sub_state=='GET_READY'">
                 <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
+                <ReactiveSequence _while="gc_is_sub_state_kickoff_side &amp;&amp; (player_role=='striker' || player_role=='supporter')" name="我方球门球：到球后方待命">
+                    <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
+                    <CalcKickDir />
+                    <GoToFreekickPosition side="attack" vx_limit="0.7" vy_limit="0.4"
+                        _while="ball_location_known || tm_ball_pos_reliable" />
+                </ReactiveSequence>
                 <SubTree ID="StrikerFreekick" _autoremap="true"
-                    _while="player_role == 'striker' || player_role == 'supporter'" />
+                    _while="!gc_is_sub_state_kickoff_side &amp;&amp; (player_role == 'striker' || player_role == 'supporter')" />
                 <SubTree ID="GoalKeeperFreekick" _autoremap="true"
                     _while="player_role == 'keeper'" />
             </ReactiveSequence>
             <SetVelocity _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; (gc_game_sub_state=='STOP' || gc_game_sub_state=='SET')" />
             <ReactiveSequence _while="gc_game_sub_state_type=='NONE' &amp;&amp; gc_is_sub_state_kickoff_side" name="我方球门球：场上球员直接大脚开球">
-                <SubTree ID="StrikerPlay" _autoremap="true"
-                    _while="player_role == 'striker' || player_role == 'supporter'" />
+                <ReactiveSequence _while="player_role=='striker' || player_role=='supporter'" name="找球、追球、调整、大脚">
+                    <SelfLocate mode="trust_direction" />
+                    <SubTree ID="Locate" _autoremap="true" _while="decision!='find'" />
+                    <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
+                    <GoBackInField _while="ball_out" />
+                    <ReactiveSequence _while="!ball_out">
+                        <CalcKickDir />
+                        <Sequence>
+                            <ReactiveSequence>
+                                <StrikerDecide decision_out="{decision}" decision_in="{decision}" chase_threshold="1.0" />
+                                <RobotFindBall _while="decision=='find'" vyaw_limit="0.8" />
+                            </ReactiveSequence>
+                            <Chase _while="decision=='chase'" vx_limit="2.0" vy_limit="0.8" vtheta_limit="1.5" dist="0.1" safe_dist="0.5" />
+                            <Adjust _while="decision=='adjust'" turn_threshold="0.5" range="0.4" vx_limit="0.9" vy_limit="0.8" vtheta_limit="2.0" vtheta_factor="1.5" tangential_speed_far="0.7" tangential_speed_near="0.15" near_threshold="0.8" no_turn_threshold="0.1" turn_first_threshold="0.5" />
+                            <RLVisionKick _while="decision=='auto_visual_kick'" min_msec_kick="1500" max_msec_kick="7000" range="6.0" />
+                        </Sequence>
+                    </ReactiveSequence>
+                </ReactiveSequence>
                 <SubTree ID="GoalKeeperPlay" _autoremap="true"
                     _while="player_role == 'keeper'" />
             </ReactiveSequence>
