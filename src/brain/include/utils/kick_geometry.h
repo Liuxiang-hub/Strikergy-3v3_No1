@@ -66,4 +66,9 @@ inline double directionForIndirectSetPlay(double ballX, double ballY,
     if (ballY < -sidelineThreshold) return kPi / 2.0;
     return directionToOpponentGoal(ballX, ballY, opponentGoalLineX);
 }
+
+inline bool isOpponentCorner(double x, double y, double fieldLength, double fieldWidth)
+{
+    return x > fieldLength / 2.0 - 2.0 && std::abs(y) > fieldWidth / 2.0 - 1.5;
+}
 } // namespace kick_geometry

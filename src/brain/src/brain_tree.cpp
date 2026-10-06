@@ -176,6 +176,7 @@ void BrainTree::init()
     REGISTER_BUILDER(Kick)
     REGISTER_BUILDER(StandStill)
     REGISTER_BUILDER(CalcKickDir)
+    REGISTER_BUILDER(CornerPassState)
     REGISTER_BUILDER(StrikerDecide)
     REGISTER_BUILDER(CamTrackBall)
     REGISTER_BUILDER(CamFindBall)
@@ -259,6 +260,9 @@ void BrainTree::initEntry()
     setEntry<bool>("gc_is_under_penalty", false);
     setEntry<bool>("gc_play_stopped", false);
     setEntry<int>("gc_set_play", 0);
+    setEntry<int>("corner_pass_phase", 0);
+    setEntry<bool>("corner_receiver_ready", false);
+    setEntry<bool>("corner_ball_near_receiver", false);
     setEntry<int>("gc_protocol_version", 0);
     setEntry<int>("gc_secondary_time", 0);
     setEntry<int>("gc_opponent_set_play_search_direction", 0);
@@ -907,7 +911,12 @@ NodeStatus GoToFreekickPosition::onRunning() {
         double attackDist = 0.7;
         getInput("attack_dist", attackDist);
 
-        if (rank == 0) {
+        if (brain->data->cornerPassPhase == 1 &&
+            brain->tree->getEntry<string>("player_role") == "supporter") {
+            targetPose.x = ballPos.x - attackDist * cos(kickDir);
+            targetPose.y = ballPos.y - attackDist * sin(kickDir);
+            targetPose.theta = kickDir;
+        } else if (rank == 0) {
             targetPose.x = ballPos.x - attackDist * cos(kickDir);
             targetPose.y = ballPos.y - attackDist * sin(kickDir);
             targetPose.theta = kickDir;
@@ -1571,6 +1580,53 @@ NodeStatus Adjust::tick()
     return NodeStatus::SUCCESS;
 }
 
+NodeStatus CornerPassState::tick()
+{
+    auto *data = brain->data;
+    const auto &fd = brain->config->fieldDimensions;
+    const bool ownCorner = brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        data->realGameSubState == "CORNER_KICK";
+    const bool ballKnown = brain->tree->getEntry<bool>("ball_location_known") ||
+        brain->tree->getEntry<bool>("tm_ball_pos_reliable");
+    const auto &ball = data->ball.posToField;
+    if (ownCorner && ballKnown && data->cornerPassPhase == 0 &&
+        data->cornerPassStartTime.nanoseconds() == 0 &&
+        kick_geometry::isOpponentCorner(ball.x, ball.y, fd.length, fd.width)) {
+        data->cornerPassPhase = 1;
+    }
+    if (data->cornerPassPhase != 0 &&
+        data->cornerPassStartTime.nanoseconds() == 0 &&
+        !brain->tree->getEntry<bool>("gc_play_stopped")) {
+        data->cornerPassStartTime = brain->get_clock()->now();
+    }
+    if (data->cornerPassPhase == 1 && ballKnown &&
+        std::hypot(ball.x, ball.y) < fd.circleRadius + 1.5) {
+        data->cornerPassPhase = 2;
+    }
+    if (data->cornerPassPhase != 0 && data->cornerPassStartTime.nanoseconds() != 0 &&
+        brain->msecsSince(data->cornerPassStartTime) > 30000.0) {
+        data->cornerPassPhase = 0;
+    }
+
+    bool receiverReady = false;
+    for (int i = 0; i < brain->config->numOfPlayers; ++i) {
+        const auto &tm = data->tmStatus[i];
+        if (i + 1 != brain->config->playerId && tm.isAlive && tm.role == "striker" &&
+            std::hypot(tm.robotPoseToField.x, tm.robotPoseToField.y) < 1.0) {
+            receiverReady = true;
+        }
+    }
+    if (brain->tree->getEntry<string>("player_role") == "striker") {
+        receiverReady = std::hypot(data->robotPoseToField.x,
+                                   data->robotPoseToField.y) < 1.0;
+    }
+    brain->tree->setEntry<int>("corner_pass_phase", data->cornerPassPhase);
+    brain->tree->setEntry<bool>("corner_receiver_ready", receiverReady);
+    brain->tree->setEntry<bool>("corner_ball_near_receiver", ballKnown &&
+        std::hypot(ball.x, ball.y) < fd.circleRadius + 2.0);
+    return NodeStatus::SUCCESS;
+}
+
 NodeStatus CalcKickDir::tick()
 {
     double crossThreshold;
@@ -1596,9 +1652,14 @@ NodeStatus CalcKickDir::tick()
     double nextKickDir = shootDir;
     auto color = 0x00FF00FF;
 
-    if (
+    if (brain->data->cornerPassPhase == 2) {
+        nextKickType = "shoot";
+        nextKickDir = shootDir;
+    }
+    else if (
         brain->data->realGameSubState == "CORNER_KICK"
-        && brain->data->isFreekickKickingOff
+        && (brain->data->cornerPassPhase == 1 ||
+            (brain->data->cornerPassPhase == 0 && brain->data->isFreekickKickingOff))
     ) {
         // 我方角球：往中圈方向开, 而不是直接冲向球门。
         nextKickType = "cross";
@@ -1831,7 +1892,22 @@ NodeStatus StrikerDecide::tick() {
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
-    if (nearBallVisualKick)
+    const string cornerRole = brain->tree->getEntry<string>("player_role");
+    const bool cornerActor =
+        (brain->data->cornerPassPhase == 1 && cornerRole == "supporter") ||
+        (brain->data->cornerPassPhase == 2 && cornerRole == "striker");
+    if (cornerActor) {
+        if (ballRange > chaseRangeThreshold) {
+            newDecision = "chase";
+        } else if (enableAutoVisualKick && !brain->tree->getEntry<bool>("ball_out") &&
+                   visualKickDirectionReady && visualKickNearRealBall(brain)) {
+            newDecision = "auto_visual_kick";
+        } else {
+            newDecision = "adjust";
+        }
+        color = 0xFF00FFFF;
+    }
+    else if (nearBallVisualKick)
     {
         // 近球也必须先获得队内踢球权，避免多机同时进入 VisualKick。
         newDecision = "auto_visual_kick";
@@ -1913,9 +1989,7 @@ NodeStatus StrikerDecide::tick() {
         color = 0xFFFF00FF;
     }
 
-    if (newDecision != "auto_visual_kick") {
-        brain->data->tmImInVisualKick = false;
-    }
+    brain->data->tmImInVisualKick = newDecision == "auto_visual_kick";
 
     setOutput("decision_out", newDecision);
     brain->log->logToScreen(
