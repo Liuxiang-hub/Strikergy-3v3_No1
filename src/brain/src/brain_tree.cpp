@@ -285,6 +285,11 @@ void BrainTree::initEntry()
 
     setEntry<bool>("we_just_scored", false);
     setEntry<bool>("wait_for_opponent_kickoff", false);
+    setEntry<bool>("corner_is_attacker", false);
+    setEntry<bool>("corner_attac_backed", false);
+    setEntry<bool>("corner_support_ready", false);
+    setEntry<bool>("corner_kick_done", false);
+    setEntry<bool>("corner_powerkick", false);
 
     // 自动视觉校准相关
     setEntry<string>("calibrate_state", "pitch");
@@ -867,6 +872,8 @@ static Pose2D calcSetPlayStandPose(Brain *brain, const Pose2D &robotPose, const 
 NodeStatus GoToFreekickPosition::onStart() {
     // brain->log->log("debug/freekick_position/onStart", rerun::TextLog(format("stage onStart")));
     _isInFinalAdjust = false;
+    _cornerMode = false;
+    _cornerAttacker = false;
     return NodeStatus::RUNNING;
 }
 
@@ -897,6 +904,62 @@ NodeStatus GoToFreekickPosition::onRunning() {
 
     const double kickDir = brain->data->kickDir;
     const double defenseDir = atan2(ballPos.y, ballPos.x + fd.length / 2.0);
+
+    const bool ownCorner =
+        brain->data->realGameSubState == "CORNER_KICK" &&
+        brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
+    if (ownCorner) {
+        _cornerMode = true;
+        const int selfIdx = brain->config->playerId - 1;
+        const double selfDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
+        double nearestDist = selfDist;
+        for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+            if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+            if (brain->data->tmStatus[i].role != "striker" &&
+                brain->data->tmStatus[i].role != "supporter") continue;
+            const auto &tm = brain->data->tmStatus[i].robotPoseToField;
+            nearestDist = std::min(nearestDist, norm(tm.x - ballPos.x, tm.y - ballPos.y));
+        }
+        _cornerAttacker = selfDist <= nearestDist + 0.03;
+        brain->tree->setEntry<bool>("corner_is_attacker", _cornerAttacker);
+
+        Pose2D targetPose{};
+        if (!_cornerAttacker) {
+            targetPose = {-2.0, 0.0, 0.0};
+        } else {
+            const double len = std::max(1e-3, norm(ballPos.x, ballPos.y));
+            targetPose.x = ballPos.x + 2.0 * ballPos.x / len;
+            targetPose.y = ballPos.y + 2.0 * ballPos.y / len;
+            targetPose.theta = atan2(-ballPos.y, -ballPos.x);
+        }
+        const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+        const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
+        if (dist < 0.30 && fabs(deltaDir) < 0.20) {
+            brain->client->setVelocity(0, 0, 0);
+            if (!_cornerAttacker) return NodeStatus::RUNNING;
+            brain->tree->setEntry<bool>("corner_attac_backed", true);
+            bool supportReady = false;
+            for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+                if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+                if (brain->data->tmStatus[i].role != "striker" &&
+                    brain->data->tmStatus[i].role != "supporter") continue;
+                const auto &tm = brain->data->tmStatus[i].robotPoseToField;
+                supportReady = norm(tm.x + 2.0, tm.y) < 0.40 && fabs(toPInPI(tm.theta)) < 0.30;
+                if (supportReady) break;
+            }
+            brain->tree->setEntry<bool>("corner_support_ready", supportReady);
+            if (!supportReady) return NodeStatus::RUNNING;
+            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            brain->data->kickType = "power_kick";
+            brain->tree->setEntry<bool>("corner_powerkick", true);
+            return NodeStatus::SUCCESS;
+        }
+        const auto targetRobot = brain->data->field2robot(targetPose);
+        brain->client->setVelocity(cap(targetRobot.x, 0.7, -0.4),
+            cap(targetRobot.y, 0.5, -0.5), cap(2.0 * targetRobot.theta, 1.5, -1.5),
+            false, false, false);
+        return NodeStatus::RUNNING;
+    }
     // 和 assist 对齐：freekick 按 tmMyCostRank 分工，不再按前锋序号。
     const int rank = brain->data->tmMyCostRank;
     const bool isCornerOrGoalKick =
@@ -2223,6 +2286,7 @@ NodeStatus Kick::onStart()
         if (
             softKickoff
             && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
+            && !brain->tree->getEntry<bool>("corner_powerkick")
             ) speed = softKickoffSpeed;
         brain->client->crabWalk(angle, speed);
     } else if (_state == "stablize") {
@@ -2291,6 +2355,7 @@ NodeStatus Kick::onRunning()
             if (
                 softKickoff
                 && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
+                && !brain->tree->getEntry<bool>("corner_powerkick")
                 ) speed = softKickoffSpeed;
                 brain->client->crabWalk(angle, speed);
             }
@@ -2301,6 +2366,11 @@ NodeStatus Kick::onRunning()
         msecs = msecs + brain->data->ball.range / speed * 1000;
         if (brain->msecsSince(_startTime) > msecs) { // 完成踢球动作
             brain->client->setVelocity(0, 0, 0);
+            if (brain->tree->getEntry<bool>("corner_powerkick")) {
+                brain->tree->setEntry<bool>("corner_powerkick", false);
+                brain->tree->setEntry<bool>("corner_attac_backed", false);
+                brain->tree->setEntry<bool>("corner_kick_done", true);
+            }
             return NodeStatus::SUCCESS;
         }
         // else

@@ -2455,6 +2455,10 @@ void Brain::applyGameControlMessage(
     tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
     tree->setEntry<string>("gc_game_sub_state", gameSubState);
     tree->setEntry<string>("gc_real_game_sub_state", data->realGameSubState);
+    // 新的定位球开始前清除上一轮我方角球完成标志。
+    if (data->realGameSubState != "CORNER_KICK") {
+        tree->setEntry<bool>("corner_kick_done", false);
+    }
     tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
     const bool penaltyKickActive = gameState == "PLAY" &&
         (data->realGameSubState == "PENALTY_KICK" ||

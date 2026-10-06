@@ -788,6 +788,8 @@ public:
 private:
     Brain *brain;
     bool _isInFinalAdjust = false;
+    bool _cornerMode = false;
+    bool _cornerAttacker = false;
 };
 
 class GoBackInField : public SyncActionNode

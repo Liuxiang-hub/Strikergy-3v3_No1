@@ -85,6 +85,9 @@
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='PLAY'" name="比赛">
+                            <!-- 我方角球在 v20 恢复比赛后会被映射为 NONE/PLAY，必须在 PLAY 内单独接入。 -->
+                            <SubTree ID="CornerKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; !corner_kick_done" />
                             <SubTree ID="KickoffPlay" _autoremap="true"
                                 _while="gc_kickoff_active &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
                             <SubTree ID="NormalPlay" _autoremap="true"
