@@ -1671,10 +1671,10 @@ NodeStatus Adjust::tick()
 
 NodeStatus CalcKickDir::tick()
 {
-    double crossThreshold;
+    double crossThreshold = 0.0;
     getInput("cross_threshold", crossThreshold);
-
     string lastKickType = brain->data->kickType;
+
     if (lastKickType == "cross") crossThreshold += 0.1; //防止震荡
 
     if (!brain->tree->getEntry<bool>("ball_location_known") &&
@@ -1687,8 +1687,23 @@ NodeStatus CalcKickDir::tick()
     auto bPos = brain->data->ball.posToField;
     auto fd = brain->config->fieldDimensions;
     const double goalLineX = fd.length / 2.0;
-    const double shootDir = kick_geometry::directionToOpponentGoal(
-        bPos.x, bPos.y, goalLineX);
+    // 正常拼抢默认不再固定瞄准球门中心：在球门中心及左右各 1 m
+    // 的候选点中，选择当前机器人转身角度代价最小的目标。
+    const double halfGoalWidth = fd.goalWidth / 2.0;
+    const double aimOffset = std::min(1.0, halfGoalWidth);
+    const double candidateGoalY[3] = {-aimOffset, 0.0, aimOffset};
+    double shootDir = 0.0;
+    double minTurnCost = std::numeric_limits<double>::infinity();
+    for (const double targetY : candidateGoalY) {
+        const double candidateDir = kick_geometry::directionToTarget(
+            bPos.x, bPos.y, goalLineX, targetY, 0.0);
+        const double turnCost = std::fabs(toPInPI(
+            candidateDir - brain->data->robotPoseToField.theta));
+        if (turnCost < minTurnCost) {
+            minTurnCost = turnCost;
+            shootDir = candidateDir;
+        }
+    }
 
     string nextKickType = "shoot";
     double nextKickDir = shootDir;
@@ -1704,13 +1719,8 @@ NodeStatus CalcKickDir::tick()
         nextKickDir = kick_geometry::directionToTarget(
             bPos.x, bPos.y, 0.0, 0.0, shootDir);
     }
-    else if (kick_geometry::minorArcWidth(thetal, thetar) < crossThreshold &&
-             bPos.x > fd.circleRadius) {
-        nextKickType = "cross";
-        color = 0xFF00FFFF;
-        nextKickDir = kick_geometry::directionToTarget(
-            bPos.x, bPos.y, goalLineX - fd.penaltyDist / 2.0, 0.0, shootDir);
-    }
+    // 正常拼抢阶段取消窄角度自动 cross，继续使用默认目标点方向，
+    // 由 StrikerDecide 在满足条件后选择 kick / power_kick / safe_shoot。
     else if (
         brain->data->isFreekickKickingOff 
         && brain->isPrimaryStriker() 
@@ -1732,7 +1742,6 @@ NodeStatus CalcKickDir::tick()
     }
 
     constexpr double kGoalpostInset = 0.5;
-    const double halfGoalWidth = fd.goalWidth / 2.0;
     const double absBallY = fabs(bPos.y);
     const bool ballInsideInsetGoalposts =
         absBallY <= std::max(0.0, halfGoalWidth - kGoalpostInset);
