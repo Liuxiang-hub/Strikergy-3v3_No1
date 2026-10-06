@@ -916,6 +916,12 @@ NodeStatus GoToFreekickPosition::onRunning() {
             targetPose.x = ballPos.x - attackDist * cos(kickDir);
             targetPose.y = ballPos.y - attackDist * sin(kickDir);
             targetPose.theta = kickDir;
+        } else if (brain->data->realGameSubState == "GOAL_KICK" &&
+                   brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side")) {
+            // 我方球门球：两名场上球员都直接到球后方，不按队内排名待命。
+            targetPose.x = ballPos.x - attackDist * cos(kickDir);
+            targetPose.y = ballPos.y - attackDist * sin(kickDir);
+            targetPose.theta = kickDir;
         } else if (rank == 0) {
             targetPose.x = ballPos.x - attackDist * cos(kickDir);
             targetPose.y = ballPos.y - attackDist * sin(kickDir);
@@ -1884,13 +1890,18 @@ NodeStatus StrikerDecide::tick() {
         visualKickNearRealBall(brain);
 
     const string cornerRole = brain->tree->getEntry<string>("player_role");
+    const bool ownGoalKick = brain->data->realGameSubState == "GOAL_KICK" &&
+        brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        !brain->tree->getEntry<bool>("gc_play_stopped") &&
+        (cornerRole == "striker" || cornerRole == "supporter");
     const bool cornerActor =
         (brain->data->cornerPassPhase == 1 && cornerRole == "supporter") ||
         (brain->data->cornerPassPhase == 2 && cornerRole == "striker");
-    if (cornerActor) {
+    if (ownGoalKick || cornerActor) {
         if (ballRange > chaseRangeThreshold) {
             newDecision = "chase";
-        } else if (enableAutoVisualKick && !brain->tree->getEntry<bool>("ball_out") &&
+        } else if ((ownGoalKick || enableAutoVisualKick) &&
+                   !brain->tree->getEntry<bool>("ball_out") &&
                    visualKickDirectionReady && visualKickNearRealBall(brain)) {
             newDecision = "auto_visual_kick";
         } else {
@@ -2625,18 +2636,22 @@ NodeStatus RLVisionKick::onRunning()
     double yieldMyCostMin = 4.0;
     brain->get_parameter("strategy.auto_visual_kick.max_parallel_count", maxParallel);
     brain->get_parameter("strategy.auto_visual_kick.yield_my_cost_min", yieldMyCostMin);
-    const bool shouldYield = !nearRealBall && teammateWinsVisualKick &&
+    const bool ownGoalKick = brain->data->realGameSubState == "GOAL_KICK" &&
+        brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        (brain->tree->getEntry<string>("player_role") == "striker" ||
+         brain->tree->getEntry<string>("player_role") == "supporter");
+    const bool shouldYield = !ownGoalKick && !nearRealBall && teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     const bool elapsedEnough = elapsed > minMsecKick;
     if (brain->tree->getEntry<bool>("ball_out")) return beginExit("ball out");
     if (_badPoseConsecutiveCount >= kVisionKickBadPoseMaxTicks) return beginExit("bad ball pose");
     if (shouldYield) return beginExit("teammate wins visual-kick slot");
-    if (_lostOwnershipConsecutiveCount >= 3) return beginExit("lost team ball ownership");
+    if (!ownGoalKick && _lostOwnershipConsecutiveCount >= 3) return beginExit("lost team ball ownership");
     if (sessionElapsed >= maxTotal) return beginExit("session timeout");
     if (brain->msecsSince(_lastProgressTime) >= noProgressTimeout) return beginExit("no progress");
     if (elapsedEnough && _ballRangeOverLimitConsecutiveCount >= 4) return beginExit("ball range over limit");
-    if (elapsedEnough && !nearRealBall && brain->data->tmMyCost > 8.0) return beginExit("cost too high");
+    if (!ownGoalKick && elapsedEnough && !nearRealBall && brain->data->tmMyCost > 8.0) return beginExit("cost too high");
 
     if (elapsed > maxMsecKick) {
         int maxExtraRounds = 1;

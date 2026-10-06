@@ -156,6 +156,10 @@ int RobotClient::RLVisionKick(bool start)
         playerRole == "supporter";
     if (start && (normalPlayVisualKick || cornerPassVisualKick)) {
         visualKickVersion = 0;
+    } else if (start && gameState == "PLAY" && realGameSubState == "GOAL_KICK" &&
+               brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+               (playerRole == "striker" || playerRole == "supporter")) {
+        visualKickVersion = 1; // 我方球门球固定使用大脚 kV2。
     }
     body["version"] = visualKickVersion;
     msg.body = body.dump();

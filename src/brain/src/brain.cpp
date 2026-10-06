@@ -569,6 +569,11 @@ void Brain::pubKickMsg() {
 
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
+    } else if (gameState == "PLAY" && realGameSubState == "GOAL_KICK" &&
+               tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+               (tree->getEntry<string>("player_role") == "striker" ||
+                tree->getEntry<string>("player_role") == "supporter")) {
+        power = 6.0;
     } else if (data->cornerPassPhase == 1 &&
                tree->getEntry<string>("player_role") == "supporter") {
         power = 3.0;
