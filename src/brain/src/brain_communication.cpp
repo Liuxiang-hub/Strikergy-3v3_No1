@@ -222,6 +222,33 @@ void BrainCommunication::broadcastTeamCommunication()
             brain->data->sendId = msg.communicationId;
             brain->data->sendTime = brain->get_clock()->now();
         }
+
+        // Wi-Fi access points commonly deliver broadcast traffic less reliably
+        // than unicast traffic. Once a teammate has been discovered through the
+        // compatible broadcast path, also send every team snapshot directly to
+        // its learned address. This makes the shared GameController state usable
+        // during a local referee-broadcast outage without changing the wire format.
+        std::array<std::string, HL_MAX_NUM_PLAYERS> teammateIps;
+        {
+            std::lock_guard<std::mutex> lock(_team_unicast_ips_mutex);
+            teammateIps = _team_unicast_ips;
+        }
+        for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i)
+        {
+            if (i == brain->config->playerId - 1 || teammateIps[i].empty())
+                continue;
+            sockaddr_in teammateAddr{};
+            teammateAddr.sin_family = AF_INET;
+            teammateAddr.sin_port = htons(_team_udp_port);
+            if (inet_pton(AF_INET, teammateIps[i].c_str(), &teammateAddr.sin_addr) != 1)
+                continue;
+            if (sendto(_team_socket, &msg, sizeof(msg), 0,
+                       reinterpret_cast<sockaddr *>(&teammateAddr),
+                       sizeof(teammateAddr)) < 0)
+                cout << RED_CODE << format("team unicast to %s failed: %s",
+                                            teammateIps[i].c_str(), strerror(errno))
+                     << RESET_CODE << endl;
+        }
         this_thread::sleep_for(chrono::milliseconds(TEAM_COMMUNICATION_INTERVAL_MS));
     }
 }
@@ -342,6 +369,10 @@ void BrainCommunication::spinTeamCommunicationReceiver()
         const int tmIdx = msg.playerId - 1;
         if (tmIdx < 0 || tmIdx >= HL_MAX_NUM_PLAYERS || brain->data->penalty[tmIdx] == SUBSTITUTE)
             continue;
+        {
+            std::lock_guard<std::mutex> lock(_team_unicast_ips_mutex);
+            _team_unicast_ips[tmIdx] = inet_ntoa(addr.sin_addr);
+        }
         log(format("TMID: %d, alive: %d, lead: %d, cost: %.1f, CmdId: %d, Cmd: %d",
                     msg.playerId, msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd));
         TMStatus &tmStatus = brain->data->tmStatus[tmIdx];

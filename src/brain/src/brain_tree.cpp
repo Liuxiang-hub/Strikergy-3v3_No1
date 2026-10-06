@@ -1589,9 +1589,11 @@ NodeStatus CornerPassState::tick()
     const bool ballKnown = brain->tree->getEntry<bool>("ball_location_known") ||
         brain->tree->getEntry<bool>("tm_ball_pos_reliable");
     const auto &ball = data->ball.posToField;
-    if (ownCorner && ballKnown && data->cornerPassPhase == 0 &&
-        data->cornerPassStartTime.nanoseconds() == 0 &&
-        kick_geometry::isOpponentCorner(ball.x, ball.y, fd.length, fd.width)) {
+    // The referee is the source of truth for entering our corner routine.
+    // Vision/localization may report the ball away from the geometric corner,
+    // especially before either robot has a fresh local observation.
+    if (ownCorner && data->cornerPassPhase == 0 &&
+        data->cornerPassStartTime.nanoseconds() == 0) {
         data->cornerPassPhase = 1;
     }
     if (data->cornerPassPhase != 0 &&
@@ -1864,16 +1866,6 @@ NodeStatus StrikerDecide::tick() {
     log(format("kickValue: %.1f, threatLevel: %.1f", kickValue, threatLevel));
 
     const auto &fieldDimensions = brain->config->fieldDimensions;
-    const bool normalContestPlay =
-        brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
-        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
-        (brain->data->realGameSubState == "NONE" ||
-         brain->data->realGameSubState == "OVERTIME");
-    const double centerCircleBoostRadius = fieldDimensions.circleRadius + 1.0;
-    const bool forceRegularKickOutsideCenter =
-        normalContestPlay &&
-        ball.posToField.x > 0.0 &&
-        std::hypot(ball.posToField.x, ball.posToField.y) > centerCircleBoostRadius;
     const bool ballInOpponentPenaltyArea =
         ball.posToField.x >= fieldDimensions.length / 2.0 - fieldDimensions.penaltyAreaLength &&
         ball.posToField.x <= fieldDimensions.length / 2.0 &&
@@ -1888,7 +1880,6 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentPenaltyArea &&
-        !forceRegularKickOutsideCenter &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
@@ -1931,7 +1922,6 @@ NodeStatus StrikerDecide::tick() {
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
         !ballInOpponentPenaltyArea &&
-        !forceRegularKickOutsideCenter &&
         !powerShootPossible &&
         brain->data->tmMyCost < 7.0 &&
         ballRange < autoVisualKickEnableDistMax &&
@@ -1967,12 +1957,6 @@ NodeStatus StrikerDecide::tick() {
     )
     {
         if (brain->data->kickType == "cross") newDecision = "cross";
-        else if (forceRegularKickOutsideCenter) {
-            newDecision = "kick";
-            log(format(
-                "experimental regular kick: opponent half outside center-circle boost radius %.2f",
-                centerCircleBoostRadius));
-        }
         else if (powerShootPossible) newDecision = "power_kick";
         else { // kickType == kick
             double threatThreshold;

@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <stdexcept>
 #include <atomic>
+#include <array>
+#include <mutex>
 #include <thread>
 
 
@@ -62,5 +64,7 @@ private:
     int _team_socket = -1;
     int _team_udp_port = 0;
     sockaddr_in _team_broadcast_addr{};
+    std::mutex _team_unicast_ips_mutex;
+    std::array<std::string, HL_MAX_NUM_PLAYERS> _team_unicast_ips{};
     static constexpr int TEAM_COMMUNICATION_INTERVAL_MS = 100;
 };
