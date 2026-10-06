@@ -1582,7 +1582,7 @@ NodeStatus Adjust::tick()
 
 NodeStatus CornerPassState::tick()
 {
-    auto *data = brain->data;
+    auto data = brain->data;
     const auto &fd = brain->config->fieldDimensions;
     const bool ownCorner = brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         data->realGameSubState == "CORNER_KICK";
