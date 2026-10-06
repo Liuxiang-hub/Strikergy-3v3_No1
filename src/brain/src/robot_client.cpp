@@ -142,8 +142,19 @@ int RobotClient::RLVisionKick(bool start)
     } else if (verLower == "kv2" || verLower == "v2") {
         visualKickVersion = 1;
     }
-    if (start && brain->data->cornerPassPhase == 1 &&
-        brain->tree->getEntry<string>("player_role") == "supporter") {
+    const string gameState = brain->tree->getEntry<string>("gc_game_state");
+    const string realGameSubState =
+        brain->tree->getEntry<string>("gc_real_game_sub_state");
+    const string playerRole = brain->tree->getEntry<string>("player_role");
+    const bool normalPlayVisualKick =
+        gameState == "PLAY" &&
+        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        (playerRole == "striker" || playerRole == "supporter") &&
+        (realGameSubState == "NONE" || realGameSubState == "OVERTIME");
+    const bool cornerPassVisualKick =
+        brain->data->cornerPassPhase == 1 &&
+        playerRole == "supporter";
+    if (start && (normalPlayVisualKick || cornerPassVisualKick)) {
         visualKickVersion = 0;
     }
     body["version"] = visualKickVersion;
