@@ -1,6 +1,10 @@
 <root BTCPP_format="4">
     <BehaviorTree ID="GoalKick">
         <ReactiveSequence>
+            <ReactiveSequence _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; gc_game_state=='PLAY' &amp;&amp; player_role=='keeper'">
+                <GoalieIdleHome dist_to_goalline="1.0" vx_limit="0.7" vy_limit="0.5"
+                    pos_tolerance="0.45" theta_tolerance="0.40" />
+            </ReactiveSequence>
             <ReactiveSequence _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY' &amp;&amp; !setplay_kick_done">
                 <!-- 我方球门球恢复后，球位未知时先找球，再计算站位。 -->
                 <SubTree ID="FindBall" _autoremap="true"
@@ -16,8 +20,8 @@
                 <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
                 <SubTree ID="StrikerFreekick" _autoremap="true"
                     _while="player_role == 'striker' || player_role == 'supporter'" />
-                <SubTree ID="GoalKeeperFreekick" _autoremap="true"
-                    _while="player_role == 'keeper'" />
+                <GoalieIdleHome _while="player_role == 'keeper'" dist_to_goalline="1.0" vx_limit="0.7" vy_limit="0.5"
+                    pos_tolerance="0.45" theta_tolerance="0.40" />
             </ReactiveSequence>
             <SetVelocity _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; (gc_game_sub_state=='STOP' || gc_game_sub_state=='SET')" />
             <ReactiveSequence _while="gc_game_sub_state_type=='NONE'">

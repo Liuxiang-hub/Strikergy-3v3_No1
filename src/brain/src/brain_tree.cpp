@@ -286,6 +286,8 @@ void BrainTree::initEntry()
     setEntry<bool>("we_just_scored", false);
     setEntry<bool>("wait_for_opponent_kickoff", false);
     setEntry<bool>("setplay_is_attacker", false);
+    setEntry<int>("setplay_attacker_id", 0);
+    setEntry<bool>("setplay_pair_ready", false);
     setEntry<bool>("setplay_attac_backed", false);
     setEntry<bool>("setplay_support_ready", false);
     setEntry<bool>("setplay_kick_done", false);
@@ -303,6 +305,14 @@ void BrainTree::initEntry()
 
 void BrainTree::tick()
 {
+    // 角球、门球、界外球的双人战术仅在 1、2 号都在场时启用。
+    // 当前机器人用 tmImAlive 表示自己，队友状态来自 tmStatus。
+    auto isPlayerAlive = [this](int playerId) {
+        if (playerId < 1 || playerId > HL_MAX_NUM_PLAYERS) return false;
+        if (playerId == brain->config->playerId) return brain->data->tmImAlive;
+        return brain->data->tmStatus[playerId - 1].isAlive;
+    };
+    setEntry<bool>("setplay_pair_ready", isPlayerAlive(1) && isPlayerAlive(2));
     tree.tickOnce();
 }
 
@@ -905,6 +915,13 @@ NodeStatus GoToFreekickPosition::onRunning() {
     const double kickDir = brain->data->kickDir;
     const double defenseDir = atan2(ballPos.y, ballPos.x + fd.length / 2.0);
 
+    const bool structuredSetPlay =
+        brain->data->realGameSubState == "CORNER_KICK" ||
+        brain->data->realGameSubState == "THROW_IN" ||
+        brain->data->realGameSubState == "GOAL_KICK";
+    const double setPlayDistTolerance = structuredSetPlay ? 0.45 : 0.30;
+    const double setPlayThetaTolerance = structuredSetPlay ? 0.30 : 0.15;
+
     const bool opponentCorner =
         brain->data->realGameSubState == "CORNER_KICK" &&
         !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
@@ -916,7 +933,16 @@ NodeStatus GoToFreekickPosition::onRunning() {
         const int rank = brain->data->tmMyStrikerCostRank;
         Pose2D targetPose{};
         const double ownGoalX = -fd.length / 2.0;
-        if (rank <= 0) {
+        if (brain->config->playerId == 1) {
+            targetPose.x = ownGoalX + fd.penaltyAreaLength;
+            targetPose.y = 0.0;
+        } else if (brain->config->playerId == 2) {
+            const double dx = -ballPos.x;
+            const double dy = -ballPos.y;
+            const double length = std::max(1e-6, std::hypot(dx, dy));
+            targetPose.x = ballPos.x + 1.5 * dx / length;
+            targetPose.y = ballPos.y + 1.5 * dy / length;
+        } else if (rank <= 0) {
             targetPose.x = ownGoalX + fd.goalAreaLength;
             targetPose.y = ballPos.y >= 0.0 ? fd.goalWidth / 2.0 : -fd.goalWidth / 2.0;
         } else {
@@ -927,7 +953,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
         targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
         const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
         const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
-        if (dist < 0.30 && fabs(deltaDir) < 0.20) {
+        if (dist < setPlayDistTolerance && fabs(deltaDir) < setPlayThetaTolerance) {
             brain->client->setVelocity(0, 0, 0);
             return NodeStatus::RUNNING;
         }
@@ -938,24 +964,35 @@ NodeStatus GoToFreekickPosition::onRunning() {
         return NodeStatus::RUNNING;
     }
 
-    const bool ownStructuredSetPlay =
+    const bool ownCornerOrThrowInSetPlay =
         (brain->data->realGameSubState == "CORNER_KICK" ||
-         brain->data->realGameSubState == "GOAL_KICK" ||
          brain->data->realGameSubState == "THROW_IN") &&
         brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
-    if (ownStructuredSetPlay) {
+    if (ownCornerOrThrowInSetPlay) {
         _cornerMode = true;
         const int selfIdx = brain->config->playerId - 1;
-        const double selfDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
-        double nearestDist = selfDist;
-        for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
-            if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
-            if (brain->data->tmStatus[i].role != "striker" &&
-                brain->data->tmStatus[i].role != "supporter") continue;
-            const auto &tm = brain->data->tmStatus[i].robotPoseToField;
-            nearestDist = std::min(nearestDist, norm(tm.x - ballPos.x, tm.y - ballPos.y));
+        const int selfId = brain->config->playerId;
+        int attackerId = brain->tree->getEntry<int>("setplay_attacker_id");
+        if (attackerId <= 0) {
+            const double selfDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
+            attackerId = selfId;
+            double nearestDist = selfDist;
+            for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+                if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+                if (brain->data->tmStatus[i].role != "striker" &&
+                    brain->data->tmStatus[i].role != "supporter") continue;
+                const auto &tm = brain->data->tmStatus[i];
+                const double tmDist = norm(tm.robotPoseToField.x - ballPos.x,
+                                           tm.robotPoseToField.y - ballPos.y);
+                if (tmDist < nearestDist - 0.03 ||
+                    (std::fabs(tmDist - nearestDist) <= 0.03 && i + 1 < attackerId)) {
+                    nearestDist = tmDist;
+                    attackerId = i + 1;
+                }
+            }
+            brain->tree->setEntry<int>("setplay_attacker_id", attackerId);
         }
-        _cornerAttacker = selfDist <= nearestDist + 0.03;
+        _cornerAttacker = attackerId == selfId;
         brain->tree->setEntry<bool>("setplay_is_attacker", _cornerAttacker);
 
         Pose2D targetPose{};
@@ -963,13 +1000,13 @@ NodeStatus GoToFreekickPosition::onRunning() {
             targetPose = {-2.0, 0.0, 0.0};
         } else {
             const double len = std::max(1e-3, norm(ballPos.x, ballPos.y));
-            targetPose.x = ballPos.x + 2.0 * ballPos.x / len;
-            targetPose.y = ballPos.y + 2.0 * ballPos.y / len;
+            targetPose.x = ballPos.x + 1.0 * ballPos.x / len;
+            targetPose.y = ballPos.y + 1.0 * ballPos.y / len;
             targetPose.theta = atan2(-ballPos.y, -ballPos.x);
         }
         const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
         const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
-        if (dist < 0.30 && fabs(deltaDir) < 0.20) {
+        if (dist < setPlayDistTolerance && fabs(deltaDir) < setPlayThetaTolerance) {
             brain->client->setVelocity(0, 0, 0);
             if (!_cornerAttacker) return NodeStatus::RUNNING;
             brain->tree->setEntry<bool>("setplay_attac_backed", true);
@@ -989,10 +1026,11 @@ NodeStatus GoToFreekickPosition::onRunning() {
             brain->tree->setEntry<bool>("setplay_powerkick", true);
             return NodeStatus::SUCCESS;
         }
-        const auto targetRobot = brain->data->field2robot(targetPose);
-        brain->client->setVelocity(cap(targetRobot.x, 0.7, -0.4),
-            cap(targetRobot.y, 0.5, -0.5), cap(2.0 * targetRobot.theta, 1.5, -1.5),
-            false, false, false);
+        // 使用场地位姿导航，由导航器处理先转身再前进，避免目标在身后时倒退直行。
+        brain->client->moveToPoseOnField3(
+            targetPose.x, targetPose.y, targetPose.theta,
+            1.4, 0.4, 0.7, 0.5, 1.5,
+            0.2, 0.2, 0.15, true);
         return NodeStatus::RUNNING;
     }
     // 和 assist 对齐：freekick 按 tmMyCostRank 分工，不再按前锋序号。
@@ -1000,6 +1038,10 @@ NodeStatus GoToFreekickPosition::onRunning() {
     const bool isCornerOrGoalKick =
         brain->data->realGameSubState == "CORNER_KICK"
         || brain->data->realGameSubState == "GOAL_KICK";
+    const bool opponentRestartReference =
+        (brain->data->realGameSubState == "THROW_IN" ||
+         brain->data->realGameSubState == "GOAL_KICK") &&
+        !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
 
     if (side == "attack") {
         double attackDist = 0.7;
@@ -1027,7 +1069,26 @@ NodeStatus GoToFreekickPosition::onRunning() {
             log(format("freekick attack fallback, rank=%d", rank));
         }
     } else if (side == "defense") {
-        if (rank == 0) {
+        if (opponentRestartReference && brain->config->playerId == 1) {
+            // 对方界外球/球门球：1号站在“球→球场中心”连线上，距球 1.5 m，面向球。
+            const double dx = -ballPos.x;
+            const double dy = -ballPos.y;
+            const double length = std::max(1e-6, std::hypot(dx, dy));
+            targetPose.x = ballPos.x + 1.5 * dx / length;
+            targetPose.y = ballPos.y + 1.5 * dy / length;
+            targetPose.theta = atan2(ballPos.y - targetPose.y,
+                                     ballPos.x - targetPose.x);
+        } else if (opponentRestartReference && brain->config->playerId == 2) {
+            // 对方界外球/球门球：2号站在“球→己方球门中心”连线上，距球 1.5 m，面向球。
+            const double ownGoalX = -fd.length / 2.0;
+            const double dx = ownGoalX - ballPos.x;
+            const double dy = -ballPos.y;
+            const double length = std::max(1e-6, std::hypot(dx, dy));
+            targetPose.x = ballPos.x + 1.5 * dx / length;
+            targetPose.y = ballPos.y + 1.5 * dy / length;
+            targetPose.theta = atan2(ballPos.y - targetPose.y,
+                                     ballPos.x - targetPose.x);
+        } else if (rank == 0) {
             targetPose.x = ballPos.x - 3.0 * cos(defenseDir);
             targetPose.y = ballPos.y - 2.5 * sin(defenseDir);
             targetPose.theta = defenseDir;
@@ -1087,7 +1148,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
     }
 
     // 对 rank>=2 的固定后场位，朝向球更稳定。
-    if (rank >= 2) {
+    if (rank >= 2 && !opponentRestartReference) {
         targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
     }
 
@@ -1095,8 +1156,8 @@ NodeStatus GoToFreekickPosition::onRunning() {
     const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
 
     if ( // 认为到达了目标位置
-        dist < 0.3
-        && fabs(deltaDir) < 0.15
+        dist < setPlayDistTolerance
+        && fabs(deltaDir) < setPlayThetaTolerance
     ) {
         brain->client->setVelocity(0, 0, 0);
         return NodeStatus::SUCCESS;
@@ -1109,7 +1170,9 @@ NodeStatus GoToFreekickPosition::onRunning() {
         adjustFreekickCached = true;
     }
 
-    if (!enableFreekickAvoid || dist < 1.5 || _isInFinalAdjust) {
+    // 角球、界外球和门球统一使用下面的 moveToPoseOnField3；保留旧微调代码仅作兼容，
+    // 不再让它接管定位运动，避免目标在身后时出现倒退直行。
+    if (false && (!enableFreekickAvoid || dist < 1.5 || _isInFinalAdjust)) {
         _isInFinalAdjust = true; // 进入最后的微调阶段
         auto targetPose_r = brain->data->field2robot(targetPose);
 
@@ -1687,11 +1750,13 @@ NodeStatus CalcKickDir::tick()
     auto bPos = brain->data->ball.posToField;
     auto fd = brain->config->fieldDimensions;
     const double goalLineX = fd.length / 2.0;
-    // 正常拼抢默认不再固定瞄准球门中心：在球门中心及左右各 1 m
+    // 正常拼抢默认不再固定瞄准球门中心：在球门中心及左右 0.5 m、1 m
     // 的候选点中，选择当前机器人转身角度代价最小的目标。
     const double halfGoalWidth = fd.goalWidth / 2.0;
     const double aimOffset = std::min(1.0, halfGoalWidth);
-    const double candidateGoalY[3] = {-aimOffset, 0.0, aimOffset};
+    const double halfAimOffset = std::min(0.5, halfGoalWidth);
+    const double candidateGoalY[5] = {
+        -aimOffset, -halfAimOffset, 0.0, halfAimOffset, aimOffset};
     double shootDir = 0.0;
     double minTurnCost = std::numeric_limits<double>::infinity();
     for (const double targetY : candidateGoalY) {
@@ -1744,7 +1809,8 @@ NodeStatus CalcKickDir::tick()
     constexpr double kGoalpostInset = 0.5;
     const double absBallY = fabs(bPos.y);
     const bool ballInsideInsetGoalposts =
-        absBallY <= std::max(0.0, halfGoalWidth - kGoalpostInset);
+        absBallY <= std::max(0.0, halfGoalWidth - kGoalpostInset) &&
+        bPos.x >= 6.0;
     if (ballInsideInsetGoalposts) {
         nextKickDir = 0.0;
     }

@@ -2464,6 +2464,18 @@ void Brain::applyGameControlMessage(
     if (!structuredSetPlay || data->realGameSubState != lastStructuredSetPlay) {
         tree->setEntry<bool>("setplay_kick_done", false);
     }
+    if (!structuredSetPlay || data->realGameSubState != lastStructuredSetPlay) {
+        // 离开或切换角球/球门球/界外球后，不能把上一轮状态带入下一棵树。
+        tree->setEntry<bool>("setplay_is_attacker", false);
+        tree->setEntry<int>("setplay_attacker_id", 0);
+        tree->setEntry<bool>("setplay_attac_backed", false);
+        tree->setEntry<bool>("setplay_support_ready", false);
+        tree->setEntry<bool>("setplay_kick_done", false);
+        tree->setEntry<bool>("setplay_powerkick", false);
+        data->isFreekickKickingOff = false;
+        data->isDirectShoot = false;
+        tree->setEntry<int>("gc_opponent_set_play_search_direction", 0);
+    }
     lastStructuredSetPlay = structuredSetPlay ? data->realGameSubState : std::string();
     tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
     const bool penaltyKickActive = gameState == "PLAY" &&

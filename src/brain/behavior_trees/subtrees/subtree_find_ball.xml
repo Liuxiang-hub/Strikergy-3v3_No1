@@ -6,13 +6,15 @@
         <ReactiveSequence>
             <GoBackInField />
             <CamFastScan />
+            <!-- 头部扫描完成仍没有球时，重新启动身体原地旋转；若队友随后提供可靠球位，外层 _while 会立即结束本子树。 -->
+            <RobotFindBall vyaw_limit="0.8" />
         </ReactiveSequence>
         <TurnOnSpot rad="3.14"  towards_ball="true"/>
         <ReactiveSequence>
             <GoBackInField />
             <CamFastScan />
         </ReactiveSequence>
-        <ReactiveSequence>
+        <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
           <GoToReadyPosition  vx_limit="0.7" />
           <Sleep msec="5000" />
         </ReactiveSequence>
