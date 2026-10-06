@@ -285,11 +285,11 @@ void BrainTree::initEntry()
 
     setEntry<bool>("we_just_scored", false);
     setEntry<bool>("wait_for_opponent_kickoff", false);
-    setEntry<bool>("corner_is_attacker", false);
-    setEntry<bool>("corner_attac_backed", false);
-    setEntry<bool>("corner_support_ready", false);
-    setEntry<bool>("corner_kick_done", false);
-    setEntry<bool>("corner_powerkick", false);
+    setEntry<bool>("setplay_is_attacker", false);
+    setEntry<bool>("setplay_attac_backed", false);
+    setEntry<bool>("setplay_support_ready", false);
+    setEntry<bool>("setplay_kick_done", false);
+    setEntry<bool>("setplay_powerkick", false);
 
     // 自动视觉校准相关
     setEntry<string>("calibrate_state", "pitch");
@@ -905,10 +905,45 @@ NodeStatus GoToFreekickPosition::onRunning() {
     const double kickDir = brain->data->kickDir;
     const double defenseDir = atan2(ballPos.y, ballPos.x + fd.length / 2.0);
 
-    const bool ownCorner =
+    const bool opponentCorner =
         brain->data->realGameSubState == "CORNER_KICK" &&
+        !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        side == "defense" &&
+        (brain->tree->getEntry<string>("player_role") == "striker" ||
+         brain->tree->getEntry<string>("player_role") == "supporter");
+    if (opponentCorner) {
+        // 对方角球：前锋组第一名守同侧近门柱，第二名守点球区边线中点。
+        const int rank = brain->data->tmMyStrikerCostRank;
+        Pose2D targetPose{};
+        const double ownGoalX = -fd.length / 2.0;
+        if (rank <= 0) {
+            targetPose.x = ownGoalX + fd.goalAreaLength;
+            targetPose.y = ballPos.y >= 0.0 ? fd.goalWidth / 2.0 : -fd.goalWidth / 2.0;
+        } else {
+            targetPose.x = ownGoalX + fd.penaltyAreaLength;
+            targetPose.y = 0.0;
+        }
+        // 面向来球方向，便于观察角球和第一落点。
+        targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
+        const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+        const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
+        if (dist < 0.30 && fabs(deltaDir) < 0.20) {
+            brain->client->setVelocity(0, 0, 0);
+            return NodeStatus::RUNNING;
+        }
+        brain->client->moveToPoseOnField3(
+            targetPose.x, targetPose.y, targetPose.theta,
+            1.4, 0.4, 0.7, 0.6, 1.5,
+            0.2, 0.2, 0.15, true);
+        return NodeStatus::RUNNING;
+    }
+
+    const bool ownStructuredSetPlay =
+        (brain->data->realGameSubState == "CORNER_KICK" ||
+         brain->data->realGameSubState == "GOAL_KICK" ||
+         brain->data->realGameSubState == "THROW_IN") &&
         brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
-    if (ownCorner) {
+    if (ownStructuredSetPlay) {
         _cornerMode = true;
         const int selfIdx = brain->config->playerId - 1;
         const double selfDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
@@ -921,7 +956,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
             nearestDist = std::min(nearestDist, norm(tm.x - ballPos.x, tm.y - ballPos.y));
         }
         _cornerAttacker = selfDist <= nearestDist + 0.03;
-        brain->tree->setEntry<bool>("corner_is_attacker", _cornerAttacker);
+        brain->tree->setEntry<bool>("setplay_is_attacker", _cornerAttacker);
 
         Pose2D targetPose{};
         if (!_cornerAttacker) {
@@ -937,7 +972,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
         if (dist < 0.30 && fabs(deltaDir) < 0.20) {
             brain->client->setVelocity(0, 0, 0);
             if (!_cornerAttacker) return NodeStatus::RUNNING;
-            brain->tree->setEntry<bool>("corner_attac_backed", true);
+            brain->tree->setEntry<bool>("setplay_attac_backed", true);
             bool supportReady = false;
             for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
                 if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
@@ -947,11 +982,11 @@ NodeStatus GoToFreekickPosition::onRunning() {
                 supportReady = norm(tm.x + 2.0, tm.y) < 0.40 && fabs(toPInPI(tm.theta)) < 0.30;
                 if (supportReady) break;
             }
-            brain->tree->setEntry<bool>("corner_support_ready", supportReady);
+            brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
             if (!supportReady) return NodeStatus::RUNNING;
             brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
             brain->data->kickType = "power_kick";
-            brain->tree->setEntry<bool>("corner_powerkick", true);
+            brain->tree->setEntry<bool>("setplay_powerkick", true);
             return NodeStatus::SUCCESS;
         }
         const auto targetRobot = brain->data->field2robot(targetPose);
@@ -2286,7 +2321,7 @@ NodeStatus Kick::onStart()
         if (
             softKickoff
             && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
-            && !brain->tree->getEntry<bool>("corner_powerkick")
+            && !brain->tree->getEntry<bool>("setplay_powerkick")
             ) speed = softKickoffSpeed;
         brain->client->crabWalk(angle, speed);
     } else if (_state == "stablize") {
@@ -2355,7 +2390,7 @@ NodeStatus Kick::onRunning()
             if (
                 softKickoff
                 && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
-                && !brain->tree->getEntry<bool>("corner_powerkick")
+                && !brain->tree->getEntry<bool>("setplay_powerkick")
                 ) speed = softKickoffSpeed;
                 brain->client->crabWalk(angle, speed);
             }
@@ -2366,10 +2401,10 @@ NodeStatus Kick::onRunning()
         msecs = msecs + brain->data->ball.range / speed * 1000;
         if (brain->msecsSince(_startTime) > msecs) { // 完成踢球动作
             brain->client->setVelocity(0, 0, 0);
-            if (brain->tree->getEntry<bool>("corner_powerkick")) {
-                brain->tree->setEntry<bool>("corner_powerkick", false);
-                brain->tree->setEntry<bool>("corner_attac_backed", false);
-                brain->tree->setEntry<bool>("corner_kick_done", true);
+            if (brain->tree->getEntry<bool>("setplay_powerkick")) {
+                brain->tree->setEntry<bool>("setplay_powerkick", false);
+                brain->tree->setEntry<bool>("setplay_attac_backed", false);
+                brain->tree->setEntry<bool>("setplay_kick_done", true);
             }
             return NodeStatus::SUCCESS;
         }

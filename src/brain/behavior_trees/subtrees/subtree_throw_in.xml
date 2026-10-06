@@ -1,7 +1,18 @@
 <root BTCPP_format="4">
     <BehaviorTree ID="ThrowIn">
         <ReactiveSequence>
+            <ReactiveSequence _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY' &amp;&amp; !setplay_kick_done">
+                <!-- 我方界外球恢复后，球位未知时先找球，再计算站位。 -->
+                <SubTree ID="FindBall" _autoremap="true"
+                    _while="!(ball_location_known || tm_ball_pos_reliable)" />
+                <CalcKickDir />
+                <GoToFreekickPosition _while="player_role == 'striker' || player_role == 'supporter'" side="attack" vx_limit="0.7" vy_limit="0.5" />
+                <Kick _while="setplay_is_attacker &amp;&amp; setplay_support_ready" speed_limit="1.4" min_msec_kick="1200" msecs_stablize="300" />
+            </ReactiveSequence>
             <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_sub_state=='GET_READY'">
+                <!-- 我方/对方界外球在进入后续站位策略前，先确保至少获得视觉或队友球位。 -->
+                <SubTree ID="FindBall" _autoremap="true"
+                    _while="!(ball_location_known || tm_ball_pos_reliable)" />
                 <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
                 <SubTree ID="StrikerFreekick" _autoremap="true"
                     _while="player_role == 'striker' || player_role == 'supporter'" />
