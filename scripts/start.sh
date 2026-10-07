@@ -30,7 +30,7 @@ echo "[START VISION]"
 # source ~/ThirdParty/zed-ros/install/setup.bash
 # nohup ros2 launch zed_wrapper zed_camera.launch.py camera_model:="zed2i" > zed.log 2>&1 &
 # nohup ros2 launch vision launch.py save_data:=true > vision.log 2>&1 &
-nohup ros2 launch vision launch.py save_data:=true > vision.log 2>&1 &
+nohup ros2 launch vision launch.py > vision.log 2>&1 &
 # nohup ros2 run ros2_sync_package sync_node > sync_node.log 2>&1 &
 # nohup sh src/vision_segmentation/run.sh > vision_segmentation.log 2>&1 &
 echo "[START BRAIN]"
