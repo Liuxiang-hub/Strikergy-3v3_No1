@@ -1655,21 +1655,7 @@ NodeStatus StrikerDecide::tick() {
 
     string newDecision;
     auto color = 0xFFFFFFFF; // for log
-    const bool nearBallVisualKick =
-        enableAutoVisualKick &&
-        !brain->tree->getEntry<bool>("ball_out") &&
-        visualKickDirectionReady &&
-        visualKickNearRealBall(brain);
-
-    if (nearBallVisualKick)
-    {
-        // 近球是本机的即时优先级，不再受 lead、cost rank 或开球待命分组限制。
-        newDecision = "auto_visual_kick";
-        brain->data->tmImInVisualKick = true;
-        color = 0xFF00FFFF;
-        log(format("near-ball visual kick: range=%.2f", ballRange));
-    }
-    else if (kickoffHold)
+    if (kickoffHold)
     {
         // 非球所在半区的两名前锋移动到预设待命点，仍由上层相机节点跟踪球。
         newDecision = "kickoff_hold";
@@ -2341,7 +2327,7 @@ NodeStatus RLVisionKick::onRunning()
             ? _badPoseConsecutiveCount + 1
             : 0;
     const bool nearRealBall = visualKickNearRealBall(brain);
-    _lostOwnershipConsecutiveCount = (brain->data->tmImLead || nearRealBall)
+    _lostOwnershipConsecutiveCount = brain->data->tmImLead
         ? 0
         : _lostOwnershipConsecutiveCount + 1;
 
@@ -2396,7 +2382,7 @@ NodeStatus RLVisionKick::onRunning()
     double yieldMyCostMin = 4.0;
     brain->get_parameter("strategy.auto_visual_kick.max_parallel_count", maxParallel);
     brain->get_parameter("strategy.auto_visual_kick.yield_my_cost_min", yieldMyCostMin);
-    const bool shouldYield = !nearRealBall && teammateWinsVisualKick &&
+    const bool shouldYield = teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     const bool elapsedEnough = elapsed > minMsecKick;
