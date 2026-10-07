@@ -2905,7 +2905,16 @@ NodeStatus RLVisionKick::onRunning()
                     brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
                     brain->tree->getEntry<bool>("setplay_is_attacker") &&
                     brain->tree->getEntry<bool>("setplay_attack_active");
-                brain->client->RLVisionKick(true, ownCornerPass ? "kV1" : "");
+                const bool normalContest =
+                    brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
+                    !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+                    (brain->data->realGameSubState == "NONE" ||
+                     brain->data->realGameSubState == "OVERTIME") &&
+                    !goalieKick;
+                // NORMAL 拼抢统一尝试 kV1；定位球的现有覆盖规则保持不变。
+                const string visualKickVersion =
+                    (normalContest || ownCornerPass) ? "kV1" : "";
+                brain->client->RLVisionKick(true, visualKickVersion);
                 _headScanStartTime = brain->get_clock()->now();
                 _visionKickStarted = true;
             }
