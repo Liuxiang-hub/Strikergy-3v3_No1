@@ -184,7 +184,7 @@ public:
     static PortsList providedPorts() { return { InputPort<double>("msecs_interval", 300, "") }; }
     NodeStatus onStart() override;
     NodeStatus onRunning() override;
-    void onHalted() override {};
+    void onHalted() override;
 private:
     double _cmdSequence[7][2] = {
         {0.2, 1.1}, {0.2, 0.0}, {0.2, -1.1},
@@ -772,6 +772,20 @@ private:
     int _direction = 0;
 };
 
+class MoveToBallSearchPosition : public StatefulActionNode
+{
+public:
+    MoveToBallSearchPosition(const string &name, const NodeConfig &config, Brain *_brain)
+        : StatefulActionNode(name, config), brain(_brain) {}
+    static PortsList providedPorts() { return {}; }
+    NodeStatus onStart() override;
+    NodeStatus onRunning() override;
+    void onHalted() override;
+private:
+    Brain *brain;
+    Pose2D _targetPose = {0.0, 0.0, 0.0};
+};
+
 class GoToFreekickPosition : public StatefulActionNode
 {
 public:
@@ -790,6 +804,7 @@ private:
     bool _isInFinalAdjust = false;
     bool _cornerMode = false;
     bool _cornerAttacker = false;
+    bool _opponentSetPlayHolding = false;
 };
 
 class GoBackInField : public SyncActionNode

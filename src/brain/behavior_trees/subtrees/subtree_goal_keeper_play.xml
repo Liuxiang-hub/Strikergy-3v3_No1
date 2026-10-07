@@ -21,6 +21,8 @@
             </Sequence>
 
             <ReactiveSequence _while="!ball_out">
+               <!-- 守门员失去全队球信息时也执行统一分区找球；3号目标为我方罚球点。 -->
+               <SubTree ID="FindBall" _while="!(ball_location_known || tm_ball_pos_reliable)" _autoremap="true" />
                <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
                <CalcKickDir />
                <Sequence>

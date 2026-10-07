@@ -200,6 +200,7 @@ void BrainTree::init()
     REGISTER_BUILDER(RobocupWalk)
     REGISTER_BUILDER(StepOnSpot)
     REGISTER_BUILDER(MoveToFarSetPlaySearchArea)
+    REGISTER_BUILDER(MoveToBallSearchPosition)
     REGISTER_BUILDER(GoToFreekickPosition)
     REGISTER_BUILDER(GoToReadyPosition)
     REGISTER_BUILDER(GoToGoalBlockingPosition)
@@ -290,6 +291,7 @@ void BrainTree::initEntry()
     setEntry<bool>("setplay_pair_ready", false);
     setEntry<bool>("setplay_attac_backed", false);
     setEntry<bool>("setplay_support_ready", false);
+    setEntry<double>("setplay_support_target_y", 0.0);
     setEntry<bool>("setplay_kick_done", false);
     setEntry<bool>("setplay_powerkick", false);
 
@@ -845,6 +847,61 @@ void MoveToFarSetPlaySearchArea::onHalted()
     _direction = 0;
 }
 
+NodeStatus MoveToBallSearchPosition::onStart()
+{
+    const auto &fd = brain->config->fieldDimensions;
+    switch (brain->config->playerId) {
+    case 1:
+        // 1号搜索球场中心。
+        _targetPose = {0.0, 0.0, 0.0};
+        break;
+    case 2:
+        // 2号搜索对方罚球点。
+        _targetPose = {fd.length / 2.0 - fd.penaltyDist, 0.0, 0.0};
+        break;
+    case 3:
+        // 3号搜索我方罚球点。
+        _targetPose = {-fd.length / 2.0 + fd.penaltyDist, 0.0, 0.0};
+        break;
+    default:
+        // 其他编号没有专用分区，退回球场中心搜索。
+        _targetPose = {0.0, 0.0, 0.0};
+        break;
+    }
+    return NodeStatus::RUNNING;
+}
+
+NodeStatus MoveToBallSearchPosition::onRunning()
+{
+    const bool ballKnown =
+        brain->tree->getEntry<bool>("ball_location_known") ||
+        brain->tree->getEntry<bool>("tm_ball_pos_reliable");
+    if (ballKnown) {
+        brain->client->setVelocity(0.0, 0.0, 0.0);
+        return NodeStatus::SUCCESS;
+    }
+
+    const auto &robotPose = brain->data->robotPoseToField;
+    const double dist = norm(
+        _targetPose.x - robotPose.x,
+        _targetPose.y - robotPose.y);
+    if (dist <= 0.40) {
+        brain->client->setVelocity(0.0, 0.0, 0.0);
+        return NodeStatus::SUCCESS;
+    }
+
+    brain->client->moveToPoseOnField3(
+        _targetPose.x, _targetPose.y, _targetPose.theta,
+        1.4, 0.4, 0.8, 0.5, 1.5,
+        0.25, 0.25, 0.20, true);
+    return NodeStatus::RUNNING;
+}
+
+void MoveToBallSearchPosition::onHalted()
+{
+    brain->client->setVelocity(0.0, 0.0, 0.0);
+}
+
 // 我方角球/门球开球时，非开球者（rank >= 1）的站位：
 // 默认原地不动、面向球；只在挡住 "球 -> kickDir" 的开球通道时才做局部横向让位。
 // 由 Assist::tick（v20 协议下我方开球时的实际生效路径）和 GoToFreekickPosition（兼容旧协议）共用。
@@ -884,6 +941,7 @@ NodeStatus GoToFreekickPosition::onStart() {
     _isInFinalAdjust = false;
     _cornerMode = false;
     _cornerAttacker = false;
+    _opponentSetPlayHolding = false;
     return NodeStatus::RUNNING;
 }
 
@@ -897,6 +955,18 @@ NodeStatus GoToFreekickPosition::onRunning() {
     string side;
     getInput("side", side);
     if (side != "attack" && side != "defense") return NodeStatus::SUCCESS;
+
+    const bool opponentStructuredSetPlay =
+        side == "defense" &&
+        !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        (brain->data->realGameSubState == "CORNER_KICK" ||
+         brain->data->realGameSubState == "GOAL_KICK" ||
+         brain->data->realGameSubState == "THROW_IN");
+    if (_opponentSetPlayHolding && opponentStructuredSetPlay) {
+        // 到位后锁定静止，不再因球位抖动重复规划，直到状态树退出本阶段。
+        brain->client->setVelocity(0.0, 0.0, 0.0);
+        return NodeStatus::RUNNING;
+    }
 
     Pose2D targetPose = {0.0, 0.0, 0.0};
     const auto fd = brain->config->fieldDimensions;
@@ -921,6 +991,25 @@ NodeStatus GoToFreekickPosition::onRunning() {
         brain->data->realGameSubState == "GOAL_KICK";
     const double setPlayDistTolerance = structuredSetPlay ? 0.45 : 0.30;
     const double setPlayThetaTolerance = structuredSetPlay ? 0.30 : 0.15;
+    constexpr double opponentBallClearance = 1.5;
+    // 目标点额外加入到位误差和 5 cm 余量，确保机器人即使停在容差边缘，
+    // 实际位置也不会侵入距球 1.5 m 的限制范围。
+    const double opponentBallTargetClearance =
+        opponentBallClearance + setPlayDistTolerance + 0.05;
+    auto enforceOpponentBallClearance = [&](Pose2D &pose) {
+        double dx = pose.x - ballPos.x;
+        double dy = pose.y - ballPos.y;
+        double distance = norm(dx, dy);
+        if (distance >= opponentBallTargetClearance) return;
+        if (distance < 1e-6) {
+            // 重合时默认向己方球门方向退出限制圈。
+            dx = -1.0;
+            dy = 0.0;
+            distance = 1.0;
+        }
+        pose.x = ballPos.x + dx / distance * opponentBallTargetClearance;
+        pose.y = ballPos.y + dy / distance * opponentBallTargetClearance;
+    };
 
     const bool opponentCorner =
         brain->data->realGameSubState == "CORNER_KICK" &&
@@ -949,12 +1038,17 @@ NodeStatus GoToFreekickPosition::onRunning() {
             targetPose.x = ownGoalX + fd.penaltyAreaLength;
             targetPose.y = 0.0;
         }
+        enforceOpponentBallClearance(targetPose);
         // 面向来球方向，便于观察角球和第一落点。
         targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
         const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+        const double robotBallDist = norm(ballPos.x - robotPose.x, ballPos.y - robotPose.y);
         const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
-        if (dist < setPlayDistTolerance && fabs(deltaDir) < setPlayThetaTolerance) {
+        if (dist < setPlayDistTolerance &&
+            fabs(deltaDir) < setPlayThetaTolerance &&
+            robotBallDist >= opponentBallClearance) {
             brain->client->setVelocity(0, 0, 0);
+            _opponentSetPlayHolding = true;
             return NodeStatus::RUNNING;
         }
         brain->client->moveToPoseOnField3(
@@ -968,6 +1062,97 @@ NodeStatus GoToFreekickPosition::onRunning() {
         (brain->data->realGameSubState == "CORNER_KICK" ||
          brain->data->realGameSubState == "THROW_IN") &&
         brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
+
+    const bool ownGoalKickSetPlay =
+        brain->data->realGameSubState == "GOAL_KICK" &&
+        brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        side == "attack";
+    if (ownGoalKickSetPlay) {
+        const int selfIdx = brain->config->playerId - 1;
+        const int selfId = brain->config->playerId;
+
+        // 本次门球只在首次进入时按距球距离选定主罚者，直到离开门球阶段才清除。
+        int attackerId = brain->tree->getEntry<int>("setplay_attacker_id");
+        if (attackerId <= 0) {
+            const double selfDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
+            attackerId = selfId;
+            double nearestDist = selfDist;
+            for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+                if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+                if (brain->data->tmStatus[i].role != "striker" &&
+                    brain->data->tmStatus[i].role != "supporter") continue;
+                const auto &tm = brain->data->tmStatus[i];
+                const double tmDist = norm(tm.robotPoseToField.x - ballPos.x,
+                                           tm.robotPoseToField.y - ballPos.y);
+                if (tmDist < nearestDist - 0.03 ||
+                    (std::fabs(tmDist - nearestDist) <= 0.03 && i + 1 < attackerId)) {
+                    nearestDist = tmDist;
+                    attackerId = i + 1;
+                }
+            }
+            brain->tree->setEntry<int>("setplay_attacker_id", attackerId);
+        }
+
+        const bool isAttacker = attackerId == selfId;
+        brain->tree->setEntry<bool>("setplay_is_attacker", isAttacker);
+
+        // 两台机器人使用同一个锁定接应点，避免球的 y 在零附近抖动时来回换边。
+        double supportTargetY = brain->tree->getEntry<double>("setplay_support_target_y");
+        if (std::fabs(supportTargetY) < 1e-6) {
+            supportTargetY = ballPos.y >= 0.0 ? 1.5 : -1.5;
+            brain->tree->setEntry<double>("setplay_support_target_y", supportTargetY);
+        }
+
+        const double passDir = atan2(-ballPos.y, -ballPos.x);
+        brain->data->kickDir = passDir;
+        Pose2D targetPose{};
+        if (isAttacker) {
+            // 主罚者退到“球 -> 中心点”方向的正后方 0.5 m，并面向中心点。
+            constexpr double behindBallDistance = 0.5;
+            targetPose.x = ballPos.x - behindBallDistance * cos(passDir);
+            targetPose.y = ballPos.y - behindBallDistance * sin(passDir);
+            targetPose.theta = passDir;
+        } else {
+            targetPose.x = 0.0;
+            targetPose.y = supportTargetY;
+            targetPose.theta = atan2(-targetPose.y, -targetPose.x);
+        }
+
+        const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+        const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
+        if (dist < setPlayDistTolerance && fabs(deltaDir) < setPlayThetaTolerance) {
+            brain->client->setVelocity(0.0, 0.0, 0.0);
+            if (!isAttacker) return NodeStatus::RUNNING;
+
+            brain->tree->setEntry<bool>("setplay_attac_backed", true);
+            bool supportReady = false;
+            const double supportTheta = atan2(-supportTargetY, 0.0);
+            for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+                if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+                if (brain->data->tmStatus[i].role != "striker" &&
+                    brain->data->tmStatus[i].role != "supporter") continue;
+                const auto &tm = brain->data->tmStatus[i].robotPoseToField;
+                supportReady =
+                    norm(tm.x, tm.y - supportTargetY) < setPlayDistTolerance &&
+                    fabs(toPInPI(tm.theta - supportTheta)) < setPlayThetaTolerance;
+                if (supportReady) break;
+            }
+            brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
+            if (!supportReady) return NodeStatus::RUNNING;
+
+            // 后续行为树进入 RLVisionKick；pubKickMsg 会将本场景力度固定为 5.5。
+            brain->data->kickType = "visual_kick";
+            brain->tree->setEntry<bool>("setplay_powerkick", false);
+            return NodeStatus::SUCCESS;
+        }
+
+        brain->client->moveToPoseOnField3(
+            targetPose.x, targetPose.y, targetPose.theta,
+            1.4, 0.4, 0.7, 0.5, 1.5,
+            0.2, 0.2, 0.15, true);
+        return NodeStatus::RUNNING;
+    }
+
     if (ownCornerOrThrowInSetPlay) {
         _cornerMode = true;
         const int selfIdx = brain->config->playerId - 1;
@@ -1000,8 +1185,9 @@ NodeStatus GoToFreekickPosition::onRunning() {
             targetPose = {-2.0, 0.0, 0.0};
         } else {
             const double len = std::max(1e-3, norm(ballPos.x, ballPos.y));
-            targetPose.x = ballPos.x + 1.0 * ballPos.x / len;
-            targetPose.y = ballPos.y + 1.0 * ballPos.y / len;
+            constexpr double behindBallDistance = 0.5;
+            targetPose.x = ballPos.x + behindBallDistance * ballPos.x / len;
+            targetPose.y = ballPos.y + behindBallDistance * ballPos.y / len;
             targetPose.theta = atan2(-ballPos.y, -ballPos.x);
         }
         const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
@@ -1022,8 +1208,8 @@ NodeStatus GoToFreekickPosition::onRunning() {
             brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
             if (!supportReady) return NodeStatus::RUNNING;
             brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
-            brain->data->kickType = "power_kick";
-            brain->tree->setEntry<bool>("setplay_powerkick", true);
+            brain->data->kickType = "visual_kick";
+            brain->tree->setEntry<bool>("setplay_powerkick", false);
             return NodeStatus::SUCCESS;
         }
         // 使用场地位姿导航，由导航器处理先转身再前进，避免目标在身后时倒退直行。
@@ -1147,19 +1333,27 @@ NodeStatus GoToFreekickPosition::onRunning() {
         targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.6, -fd.width / 2.0 + 0.6);
     }
 
-    // 对 rank>=2 的固定后场位，朝向球更稳定。
-    if (rank >= 2 && !opponentRestartReference) {
+    // 对方角球、门球、界外球的所有防守站位最终都明确面向球。
+    if (opponentStructuredSetPlay) {
+        enforceOpponentBallClearance(targetPose);
+        targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
+    } else if (rank >= 2 && !opponentRestartReference) {
         targetPose.theta = atan2(ballPos.y - targetPose.y, ballPos.x - targetPose.x);
     }
 
     const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+    const double robotBallDist = norm(ballPos.x - robotPose.x, ballPos.y - robotPose.y);
     const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
 
-    if ( // 认为到达了目标位置
-        dist < setPlayDistTolerance
+    if (dist < setPlayDistTolerance
         && fabs(deltaDir) < setPlayThetaTolerance
+        && (!opponentStructuredSetPlay || robotBallDist >= opponentBallClearance)
     ) {
         brain->client->setVelocity(0, 0, 0);
+        if (opponentStructuredSetPlay) {
+            _opponentSetPlayHolding = true;
+            return NodeStatus::RUNNING;
+        }
         return NodeStatus::SUCCESS;
     }
 
@@ -1216,6 +1410,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
 }
 
 void GoToFreekickPosition::onHalted() {
+    _opponentSetPlayHolding = false;
     // brain->log->log("debug/freekick_position/onHault", rerun::TextLog(format("stage OnHalted")));
 }
 
@@ -2566,6 +2761,19 @@ NodeStatus RLVisionKick::onRunning()
 
     const bool goalieKick = brain->tree->getEntry<bool>("goalie_block_kick_active");
     auto clearState = [&]() {
+        const bool ownStructuredSetPlay =
+            brain->data->realGameSubState == "GOAL_KICK" ||
+            brain->data->realGameSubState == "CORNER_KICK" ||
+            brain->data->realGameSubState == "THROW_IN";
+        const bool completedOwnSetPlayPass =
+            _visionKickStarted &&
+            ownStructuredSetPlay &&
+            brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+            brain->tree->getEntry<bool>("setplay_is_attacker") &&
+            brain->tree->getEntry<bool>("setplay_support_ready");
+        if (completedOwnSetPlayPass) {
+            brain->tree->setEntry<bool>("setplay_kick_done", true);
+        }
         brain->data->tmImInVisualKick = false;
         brain->tree->setEntry<bool>("goalie_block_kick_active", false);
         brain->data->goalieVisualKickSubState = "none";
@@ -2967,6 +3175,7 @@ void RobotFindBall::onHalted()
         // brain->log->log("debug/RobotFindBall", rerun::TextLog(msg));
     };
     log("RobotFindBall onHalted");
+    brain->client->setVelocity(0, 0, 0);
     _turnDir = 1.0;
 }
 
@@ -3033,6 +3242,11 @@ NodeStatus TurnOnSpot::onRunning()
     // else 
     brain->client->setVelocity(0, 0, (_angle - _cumAngle)*2);
     return NodeStatus::RUNNING;
+}
+
+void TurnOnSpot::onHalted()
+{
+    brain->client->setVelocity(0, 0, 0);
 }
 
 // ... (此处为 SelfLocate 系列函数的完整实现，因篇幅过长未全部展开，但包含所有逻辑，如 SelfLocate, SelfLocateEnterField, SelfLocateLine 等，保持原文件不变) ...

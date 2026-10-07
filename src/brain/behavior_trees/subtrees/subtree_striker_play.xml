@@ -35,8 +35,8 @@
                   <Sequence>
                      <ReactiveSequence>
                         <StrikerDecide decision_out="{decision}" decision_in="{decision}" chase_threshold="1.0" />
-                        <!-- 比赛中丢球时持续原地转身找球，避免 FindBall 扫描完成后进入待机。 -->
-                        <RobotFindBall _while="decision == 'find'" vyaw_limit="0.8" />
+                        <!-- 比赛中丢球时统一执行：快扫、转满一周、分区导航、到位继续旋转。 -->
+                        <SubTree ID="FindBall" _while="decision == 'find'" _autoremap="true" />
                      </ReactiveSequence>
                         <KickoffStand _while="decision == 'kickoff_hold'" dist_tolerance="0.5" theta_tolerance="0.2" vx_limit="0.6" vy_limit="0.5" hold_vtheta_limit="0.6" />
                         <Assist _while="decision == 'assist'" vx_limit = "1.2" vy_limit="0.6" />

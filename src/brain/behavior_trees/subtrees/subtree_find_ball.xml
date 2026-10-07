@@ -3,20 +3,28 @@
 <root BTCPP_format="4" >
   <BehaviorTree ID="FindBall">
      <Sequence name="root">
-        <ReactiveSequence>
-            <GoBackInField />
-            <CamFastScan />
-            <!-- 头部扫描完成仍没有球时，重新启动身体原地旋转；若队友随后提供可靠球位，外层 _while 会立即结束本子树。 -->
-            <RobotFindBall vyaw_limit="0.8" />
-        </ReactiveSequence>
-        <TurnOnSpot rad="3.14"  towards_ball="true"/>
-        <ReactiveSequence>
-            <GoBackInField />
-            <CamFastScan />
-        </ReactiveSequence>
+        <!-- 第一阶段只执行一次：确认机器人在场内，然后完成一轮快速头部扫描。 -->
+        <GoBackInField />
+        <CamFastScan />
+
+        <!-- 第二阶段：头部继续扫描，同时身体完整旋转一周。任一机器人找到球后，
+             队友共享球位会使 _while 立即退出。 -->
         <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
-          <GoToReadyPosition  vx_limit="0.7" />
-          <Sleep msec="5000" />
+            <CamFindBall />
+            <TurnOnSpot rad="6.283185307" />
+        </ReactiveSequence>
+
+        <!-- 第三阶段：全队在一周扫描后仍未找到球，按编号分区搜索。
+             1号去球场中心，2号去对方罚球点，3号去我方罚球点；移动中继续扫头。 -->
+        <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
+            <CamFindBall />
+            <MoveToBallSearchPosition />
+        </ReactiveSequence>
+
+        <!-- 到达分区搜索点后，持续头部扫描并原地旋转，直到本机或任一队友找到球。 -->
+        <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
+            <CamFindBall />
+            <RobotFindBall vyaw_limit="0.8" />
         </ReactiveSequence>
       </Sequence>
   </BehaviorTree>
