@@ -184,7 +184,7 @@ public:
     static PortsList providedPorts() { return { InputPort<double>("msecs_interval", 300, "") }; }
     NodeStatus onStart() override;
     NodeStatus onRunning() override;
-    void onHalted() override;
+    void onHalted() override {};
 private:
     double _cmdSequence[7][2] = {
         {0.2, 1.1}, {0.2, 0.0}, {0.2, -1.1},
@@ -220,7 +220,7 @@ public:
     }
     NodeStatus onStart() override;
     NodeStatus onRunning() override;
-    void onHalted() override {};
+    void onHalted() override;
 private:
     double _lastAngle = 0.0;
     double _angle = 0.0;
