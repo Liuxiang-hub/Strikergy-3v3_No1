@@ -437,7 +437,24 @@ int RobotClient::moveToPoseOnField2(double tx, double ty, double ttheta, double 
         if (avoidObstacle) {
             if (now < timeEndAvoid) { // 在避障中, 执行避障逻辑
                 double distToObstacle = brain->distToObstacle(0);
-                if (distToObstacle < SAFE_DIST / 2.0) { // 距离障碍物太近, 后退
+                double distToObstacleOnTarget = brain->distToObstacle(tarDir_r);
+                if (distToObstacleOnTarget >= SAFE_DIST) {
+                    // 目标方向已经畅通时立即结束避障，重新朝目标转向/前进。
+                    // 不能继续沿避障时的朝向直走，否则会越过目标后再绕回来。
+                    timeEndAvoid = now;
+                    isBacking = false;
+                    if (fabs(tarDir_r) > turnThreshold) {
+                        vx = 0.0;
+                        vy = 0.0;
+                        vtheta = tarDir_r;
+                    } else {
+                        if (distToObstacleOnTarget < SAFE_DIST * 2.0)
+                            vxLimit *= 0.5;
+                        vx = cap(range, vxLimit, -vxLimit);
+                        vy = 0.0;
+                        vtheta = tarDir_r;
+                    }
+                } else if (distToObstacle < SAFE_DIST / 2.0) { // 距离障碍物太近, 后退
                     isBacking = true;
                     timeEndAvoid = now + rclcpp::Duration(AVOID_SECS, 0.0);
                     avoidDir = brain->calcAvoidDir(tarDir_r, SAFE_DIST) > 0 ? 1.0 : -1.0;
@@ -455,8 +472,9 @@ int RobotClient::moveToPoseOnField2(double tx, double ty, double ttheta, double 
                     vy = 0.0;
                     vtheta = avoidDir * brain->config->vthetaLimit;
                 } else {
+                    // 当前朝向已经畅通、但目标连线仍被挡住：沿绕行方向前进，
+                    // 直到目标方向畅通，再由上面的分支立即恢复目标跟踪。
                     vx = vxLimit;
-                    if (brain->distToObstacle(tarDir_r) < SAFE_DIST * 2) vxLimit *= 0.5;
                     vy = 0.0;
                     vtheta = 0.0;
                 }

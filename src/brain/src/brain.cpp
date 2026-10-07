@@ -194,7 +194,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.set_play_stand.side_margin", 0.2);
 
     declare_parameter<double>("RLVisionKick.goalie_clearance_power", 6.0);
-    declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.5);
+    declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.0);
     declare_parameter<double>("RLVisionKick.own_kickoff_power", 2.0);
 
     declare_parameter<int>("obstacle_avoidance.depth_sample_step", 16);
@@ -555,7 +555,7 @@ void Brain::pubKickMsg() {
          realGameSubState == "THROW_IN") &&
         tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         tree->getEntry<bool>("setplay_is_attacker") &&
-        tree->getEntry<bool>("setplay_support_ready");
+        tree->getEntry<bool>("setplay_attack_active");
     const bool ownKickoffPass =
         data->isKickingOff &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
