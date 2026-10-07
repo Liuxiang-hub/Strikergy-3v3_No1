@@ -778,7 +778,9 @@ class MoveToBallSearchPosition : public StatefulActionNode
 public:
     MoveToBallSearchPosition(const string &name, const NodeConfig &config, Brain *_brain)
         : StatefulActionNode(name, config), brain(_brain) {}
-    static PortsList providedPorts() { return {}; }
+    static PortsList providedPorts() {
+        return { InputPort<string>("mode", "normal", "normal or set_play") };
+    }
     NodeStatus onStart() override;
     NodeStatus onRunning() override;
     void onHalted() override;

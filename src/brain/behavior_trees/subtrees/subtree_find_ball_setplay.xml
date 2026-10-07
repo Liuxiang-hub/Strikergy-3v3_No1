@@ -1,0 +1,27 @@
+<root BTCPP_format="4">
+  <BehaviorTree ID="SetPlayFindBall">
+    <Sequence name="set_play_find_ball">
+      <GoBackInField />
+      <CamFastScan />
+
+      <!-- 快速头扫后身体只旋转一周；发现本机或队友球位立即退出。 -->
+      <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
+        <CamFindBall />
+        <TurnOnSpot rad="6.283185307" />
+      </ReactiveSequence>
+
+      <!-- 仍无球时，角球/门球统一去己方禁区前沿的 y 正/负搜索点，
+           导航过程中发现球或收到队友球位会立即退出，不走常规搜索点路线。 -->
+      <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
+        <CamFindBall />
+        <MoveToBallSearchPosition mode="set_play" />
+      </ReactiveSequence>
+
+      <!-- 到达专用点后继续头部扫描和原地旋转。 -->
+      <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
+        <CamFindBall />
+        <RobotFindBall vyaw_limit="0.8" />
+      </ReactiveSequence>
+    </Sequence>
+  </BehaviorTree>
+</root>

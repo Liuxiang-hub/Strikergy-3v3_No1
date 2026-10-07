@@ -851,6 +851,32 @@ void MoveToFarSetPlaySearchArea::onHalted()
 NodeStatus MoveToBallSearchPosition::onStart()
 {
     const auto &fd = brain->config->fieldDimensions;
+    string mode = "normal";
+    getInput("mode", mode);
+    if (mode == "set_play" || mode == "goal_kick") {
+        const bool cornerKick = mode == "corner_kick" ||
+            brain->data->realGameSubState == "CORNER_KICK";
+        if (cornerKick) {
+            // 此时本机和队友都还不知道球在哪，不能用球位决定搜索点。
+            // 两台机器人分头覆盖对方球门侧的两个角点，坐标向场内缩 0.5 m。
+            const double inset = 0.5;
+            const double cornerSign = brain->config->playerId == 2 ? -1.0 : 1.0;
+            _targetPose = {
+                fd.length / 2.0 - inset,
+                cornerSign * (fd.width / 2.0 - inset),
+                0.0};
+            return NodeStatus::RUNNING;
+        }
+        // 我方门球找球点：己方禁区前沿的 y 正、负两侧。
+        // 1号去 y 正点，2号去 y 负点。
+        const double ownPenaltyFrontX = -fd.length / 2.0 + fd.penaltyAreaLength;
+        const double searchY = fd.penaltyAreaWidth / 2.0;
+        _targetPose = {
+            ownPenaltyFrontX,
+            brain->config->playerId == 2 ? -searchY : searchY,
+            0.0};
+        return NodeStatus::RUNNING;
+    }
     switch (brain->config->playerId) {
     case 1:
         // 1号搜索球场中心。
@@ -1810,6 +1836,17 @@ NodeStatus KickoffStand::tick()
         return NodeStatus::SUCCESS;
     }
 
+    // 我方开球时，如果 1、2 号都在线，2 号固定保持静止；
+    // 不能因为开球分组或实时评分变化而被重新选成进攻者。
+    const bool ownKickoffPlayer2Hold =
+        brain->data->isKickingOff &&
+        brain->config->playerId == 2 &&
+        brain->tree->getEntry<bool>("setplay_pair_ready");
+    if (ownKickoffPlayer2Hold) {
+        brain->client->setVelocity(0.0, 0.0, 0.0);
+        return NodeStatus::SUCCESS;
+    }
+
     double distTolerance, thetaTolerance, vxLimit, vyLimit, holdVthetaLimit;
     getInput("dist_tolerance", distTolerance);
     getInput("theta_tolerance", thetaTolerance);
@@ -2115,11 +2152,15 @@ NodeStatus StrikerDecide::tick() {
     const int kickoffRank = kickoffGroupRank(brain);
     const bool assignedOpponentHalf = kickoffRank >= 0 && kickoffRank < 2;
     const bool isThreePlayerTeam = brain->config->numOfPlayers == 3;
+    const bool ownKickoffPlayer2Hold =
+        brain->data->isKickingOff &&
+        brain->config->playerId == 2 &&
+        brain->tree->getEntry<bool>("setplay_pair_ready");
     const bool kickoffAttack = kickoffPhase &&
         (isThreePlayerTeam
             ? kickoffRank == 0
             : assignedOpponentHalf == ballInOpponentHalf);
-    const bool kickoffHold = kickoffPhase && !kickoffAttack;
+    const bool kickoffHold = kickoffPhase && (!kickoffAttack || ownKickoffPlayer2Hold);
 
     // No strategy calculation below may consume a placeholder ball. During a
     // kickoff we can still choose the latched stand group without a live ball.
@@ -2226,6 +2267,7 @@ NodeStatus StrikerDecide::tick() {
     auto color = 0xFFFFFFFF; // for log
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
+        !ownKickoffPlayer2Hold &&
         (setPlayAttackActive ||
          (brain->data->tmImLead && brain->data->tmMyCostRank == 0)) &&
         !brain->tree->getEntry<bool>("ball_out") &&

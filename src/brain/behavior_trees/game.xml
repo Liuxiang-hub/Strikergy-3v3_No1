@@ -2,6 +2,7 @@
 
 <root BTCPP_format="4">
     <include path="./subtrees/subtree_cam_find_and_track_ball.xml" />
+    <include path="./subtrees/subtree_find_ball_setplay.xml" />
     <include path="./subtrees/subtree_striker_play.xml" />
     <include path="./subtrees/subtree_goal_keeper_play.xml" />
     <include path="./subtrees/subtree_striker_freekick.xml" />

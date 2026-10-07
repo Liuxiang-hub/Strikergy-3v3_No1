@@ -8,7 +8,7 @@
             <ReactiveSequence _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY'">
                 <!-- 等待和进攻必须互斥；进攻开始后不再重跑站位节点，避免中断 VisualKick。 -->
                 <ReactiveSequence _while="setplay_pair_ready &amp;&amp; !setplay_attack_active">
-                    <SubTree ID="FindBall" _autoremap="true"
+                    <SubTree ID="SetPlayFindBall" _autoremap="true"
                         _while="!(ball_location_known || tm_ball_pos_reliable)" />
                     <CalcKickDir />
                     <GoToFreekickPosition _while="player_role == 'striker' || player_role == 'supporter'" side="attack" vx_limit="0.7" vy_limit="0.5" />
@@ -21,8 +21,10 @@
             </ReactiveSequence>
             <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_sub_state=='GET_READY'">
                 <!-- 我方/对方球门球在进入后续站位策略前，先确保至少获得视觉或队友球位。 -->
+                <SubTree ID="SetPlayFindBall" _autoremap="true"
+                    _while="gc_is_sub_state_kickoff_side &amp;&amp; !(ball_location_known || tm_ball_pos_reliable)" />
                 <SubTree ID="FindBall" _autoremap="true"
-                    _while="!(ball_location_known || tm_ball_pos_reliable)" />
+                    _while="!gc_is_sub_state_kickoff_side &amp;&amp; !(ball_location_known || tm_ball_pos_reliable)" />
                 <SubTree ID="Locate" _autoremap="true" _while="ball_location_known" />
                 <SubTree ID="StrikerFreekick" _autoremap="true"
                     _while="player_role == 'striker' || player_role == 'supporter'" />
