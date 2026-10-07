@@ -142,7 +142,7 @@ brain_node:
       avoid_during_kick: false 
       kick_ao_safe_dist: 1.5 
       kick_ao_use_shoot: false 
-      avoid_during_chase: false 
+      avoid_during_chase: true
       chase_ao_safe_dist: 1.5 
       always_turn_left: false 
 
