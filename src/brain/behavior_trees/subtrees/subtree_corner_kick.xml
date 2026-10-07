@@ -6,11 +6,13 @@
                     pos_tolerance="0.45" theta_tolerance="0.40" />
             </ReactiveSequence>
             <ReactiveSequence _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY'">
-                <!-- 球位未知时先完整执行找球流程；视觉或队友获得可靠球位后再进入角球站位。 -->
-                <SubTree ID="FindBall" _autoremap="true"
-                    _while="!(ball_location_known || tm_ball_pos_reliable)" />
-                <CalcKickDir />
-                <GoToFreekickPosition _while="player_role == 'striker' || player_role == 'supporter'" side="attack" vx_limit="0.7" vy_limit="0.5" />
+                <!-- 等待和进攻必须互斥；进攻开始后不再重跑站位节点，避免中断 VisualKick。 -->
+                <ReactiveSequence _while="!setplay_attack_active">
+                    <SubTree ID="FindBall" _autoremap="true"
+                        _while="!(ball_location_known || tm_ball_pos_reliable)" />
+                    <CalcKickDir />
+                    <GoToFreekickPosition _while="player_role == 'striker' || player_role == 'supporter'" side="attack" vx_limit="0.7" vy_limit="0.5" />
+                </ReactiveSequence>
                 <SubTree ID="StrikerPlay" _autoremap="true"
                     _while="setplay_is_attacker &amp;&amp; setplay_attack_active" />
             </ReactiveSequence>
