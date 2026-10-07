@@ -2766,7 +2766,8 @@ NodeStatus RLVisionKick::onStart()
     _extraRoundsUsed = 0;
     _badPoseConsecutiveCount = 0;
     _ballRangeOverLimitConsecutiveCount = 0;
-    _lostOwnershipConsecutiveCount = 0;
+    _ownershipLossActive = false;
+    _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     _progressBaselineValid = brain->data->ballDetected &&
         std::isfinite(brain->data->ball.range) &&
         std::isfinite(brain->data->ball.posToField.x) &&
@@ -2914,9 +2915,6 @@ NodeStatus RLVisionKick::onRunning()
             ? _badPoseConsecutiveCount + 1
             : 0;
     const bool nearRealBall = visualKickNearRealBall(brain);
-    _lostOwnershipConsecutiveCount = brain->data->tmImLead
-        ? 0
-        : _lostOwnershipConsecutiveCount + 1;
 
     double progressRangeDelta = 0.12;
     double progressBallForwardDelta = 0.15;
@@ -2947,13 +2945,20 @@ NodeStatus RLVisionKick::onRunning()
     }
 
     bool teammateWinsVisualKick = false;
+    bool teammateExplicitlyLead = false;
+    int explicitLeaderId = 0;
     double minTeammateVisualKickCost = std::numeric_limits<double>::infinity();
     int minTeammateVisualKickId = 0;
     const int selfIdx = brain->config->playerId - 1;
     for (int i = 0; i < brain->config->numOfPlayers && i < HL_MAX_NUM_PLAYERS; ++i) {
         if (i == selfIdx) continue;
         const auto &tm = brain->data->tmStatus[i];
-        if (!tm.isAlive || !tm.isInVisualKick) continue;
+        if (!tm.isAlive) continue;
+        if (!goalieKick && tm.isLead && explicitLeaderId == 0) {
+            teammateExplicitlyLead = true;
+            explicitLeaderId = i + 1;
+        }
+        if (!tm.isInVisualKick) continue;
         if (tm.cost < minTeammateVisualKickCost) {
             minTeammateVisualKickCost = tm.cost;
             minTeammateVisualKickId = i + 1;
@@ -2972,11 +2977,30 @@ NodeStatus RLVisionKick::onRunning()
     const bool shouldYield = teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
+    double ownershipGraceMs = 1000.0;
+    brain->get_parameter("strategy.cooperation.attacker_lost_ball_grace_ms", ownershipGraceMs);
+    ownershipGraceMs = std::max(0.0, ownershipGraceMs);
+    bool ownershipGraceExpired = false;
+    if (brain->data->tmImLead) {
+        _ownershipLossActive = false;
+        _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    } else if (!teammateExplicitlyLead) {
+        if (!_ownershipLossActive) {
+            _ownershipLossActive = true;
+            _ownershipLossStartTime = brain->get_clock()->now();
+        }
+        ownershipGraceExpired =
+            brain->msecsSince(_ownershipLossStartTime) >= ownershipGraceMs;
+    }
+
     const bool elapsedEnough = elapsed > minMsecKick;
     if (brain->tree->getEntry<bool>("ball_out")) return beginExit("ball out");
     if (_badPoseConsecutiveCount >= kVisionKickBadPoseMaxTicks) return beginExit("bad ball pose");
+    if (teammateExplicitlyLead) {
+        return beginExit(format("teammate %d took team ball ownership", explicitLeaderId));
+    }
     if (shouldYield) return beginExit("teammate wins visual-kick slot");
-    if (_lostOwnershipConsecutiveCount >= 3) return beginExit("lost team ball ownership");
+    if (ownershipGraceExpired) return beginExit("lost team ball ownership after grace period");
     if (sessionElapsed >= maxTotal) return beginExit("session timeout");
     if (brain->msecsSince(_lastProgressTime) >= noProgressTimeout) return beginExit("no progress");
     if (elapsedEnough && _ballRangeOverLimitConsecutiveCount >= 4) return beginExit("ball range over limit");

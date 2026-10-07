@@ -182,6 +182,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.cooperation.goalie_distance_tie_margin", 0.15);
     declare_parameter<bool>("strategy.cooperation.goalie_fallback_use_gc_goalie", true);
     declare_parameter<bool>("strategy.cooperation.goalie_attack_handoff", true);
+    declare_parameter<double>("strategy.cooperation.attacker_lost_ball_grace_ms", 1000.0);
     declare_parameter<bool>("strategy.far_set_play_search.enable", true);
     declare_parameter<double>("strategy.far_set_play_search.trigger_x", 0.0);
     declare_parameter<double>("strategy.far_set_play_search.field_target_x_ratio", 0.25);
@@ -1069,6 +1070,7 @@ void Brain::handleCooperation() {
         if (bestOwner.id == 0 || betterOwner(candidate, bestOwner)) bestOwner = candidate;
     }
     static int normalAttackerId = 0;
+    static rclcpp::Time normalAttackerLastConfirmedTime(0, 0, RCL_ROS_TIME);
     int ownerId = bestOwner.id;
     if (normalOwnerPhase) {
         constexpr double ATTACKER_KEEP_DIST_MARGIN_M = 0.3;
@@ -1086,9 +1088,39 @@ void Brain::handleCooperation() {
                 !(bestOwner.facingScore < previous->facingScore - FACING_FORCE_SWITCH_MARGIN);
             if (keepPrevious) ownerId = previous->id;
         }
+
+        // VisualKick 期间视觉可能会短暂漏检一两帧。若这一帧所有场上球员都没有
+        // 成为候选者，则在有限时间内保留原 attacker，避免外层决策树先于
+        // RLVisionKick 的退出保护把动作直接 halt。只要出现新的有效候选者，
+        // 仍立即按正常评分/迟滞规则重新确定球权，不会把球权永久锁住。
+        if (ownerId != 0) {
+            normalAttackerLastConfirmedTime = get_clock()->now();
+        } else if (normalAttackerId != 0) {
+            bool previousOwnerAliveAndKicking = false;
+            if (normalAttackerId == selfId) {
+                previousOwnerAliveAndKicking = data->tmImAlive && data->tmImInVisualKick;
+            } else {
+                const int previousIdx = normalAttackerId - 1;
+                if (previousIdx >= 0 && previousIdx < config->numOfPlayers &&
+                    previousIdx < HL_MAX_NUM_PLAYERS) {
+                    const auto &previousTm = data->tmStatus[previousIdx];
+                    previousOwnerAliveAndKicking =
+                        previousTm.isAlive && previousTm.isInVisualKick;
+                }
+            }
+
+            double lostBallGraceMs = 1000.0;
+            get_parameter("strategy.cooperation.attacker_lost_ball_grace_ms", lostBallGraceMs);
+            if (previousOwnerAliveAndKicking &&
+                normalAttackerLastConfirmedTime.nanoseconds() != 0 &&
+                msecsSince(normalAttackerLastConfirmedTime) < std::max(0.0, lostBallGraceMs)) {
+                ownerId = normalAttackerId;
+            }
+        }
         normalAttackerId = ownerId;
     } else {
         normalAttackerId = 0;
+        normalAttackerLastConfirmedTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
     data->tmImLead = data->tmImAlive && ownerId == selfId;
     tree->setEntry<bool>("is_lead", data->tmImLead);

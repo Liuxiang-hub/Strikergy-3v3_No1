@@ -375,7 +375,8 @@ private:
     int _extraRoundsUsed = 0;
     int _badPoseConsecutiveCount = 0;
     int _ballRangeOverLimitConsecutiveCount = 0;
-    int _lostOwnershipConsecutiveCount = 0;
+    bool _ownershipLossActive = false;
+    rclcpp::Time _ownershipLossStartTime;
     bool _progressBaselineValid = false;
     double _progressBallRange = 0.0;
     Point _progressBallField{0.0, 0.0, 0.0};
