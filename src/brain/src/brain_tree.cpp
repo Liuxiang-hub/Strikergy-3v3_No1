@@ -992,10 +992,8 @@ NodeStatus GoToFreekickPosition::onRunning() {
     const double setPlayDistTolerance = structuredSetPlay ? 0.45 : 0.30;
     const double setPlayThetaTolerance = structuredSetPlay ? 0.30 : 0.15;
     constexpr double opponentBallClearance = 1.5;
-    // 目标点额外加入到位误差和 5 cm 余量，确保机器人即使停在容差边缘，
-    // 实际位置也不会侵入距球 1.5 m 的限制范围。
-    const double opponentBallTargetClearance =
-        opponentBallClearance + setPlayDistTolerance + 0.05;
+    // 对方定位球防守目标固定在距球 1.8 m；到位判定仍额外要求实际距离不小于 1.5 m。
+    constexpr double opponentBallTargetClearance = 1.8;
     auto enforceOpponentBallClearance = [&](Pose2D &pose) {
         double dx = pose.x - ballPos.x;
         double dy = pose.y - ballPos.y;

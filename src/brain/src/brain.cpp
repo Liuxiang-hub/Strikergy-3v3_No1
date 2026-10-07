@@ -1484,30 +1484,19 @@ void Brain::updateKickoffMemory() {
         const bool gameControllerSaysBallFree =
             tree->getEntry<string>("gc_game_state") == "PLAY"
             && tree->getEntry<int>("gc_secondary_time") <= 0;
+        const bool isV20OpponentNonPenaltySetPlay =
+            tree->getEntry<int>("gc_protocol_version") >= 20 &&
+            opponentSetPlay &&
+            data->realGameSubState != "PENALTY_KICK";
         const bool releasedByTimeout =
-            !isV20PrimaryKickoff && timeReached();
+            !isV20PrimaryKickoff &&
+            !isV20OpponentNonPenaltySetPlay &&
+            timeReached();
 
         if ((isV20PrimaryKickoff && gameControllerSaysBallFree)
             || releasedByTimeout) {
             tree->setEntry<bool>("wait_for_opponent_kickoff", false);
             waitingForOpponentPrimaryKickoff = false;
-            const bool isV20OpponentNonPenaltySetPlay =
-                tree->getEntry<int>("gc_protocol_version") >= 20 &&
-                opponentSetPlay &&
-                data->realGameSubState != "PENALTY_KICK";
-            if (releasedByTimeout && isV20OpponentNonPenaltySetPlay) {
-                // Some controllers may keep set_play non-zero after the ball
-                // is released. Latch Ball Free locally after the safety timeout
-                // until the current set play clears or a new stopped preparation begins.
-                data->opponentSetPlayReleasedByFallback = true;
-                data->opponentSetPlayFallbackCode =
-                    tree->getEntry<int>("gc_set_play");
-                data->realGameSubState = "NONE";
-                tree->setEntry<string>("gc_game_sub_state_type", "NONE");
-                tree->setEntry<string>("gc_game_sub_state", "PLAY");
-                tree->setEntry<string>("gc_real_game_sub_state", "NONE");
-                tree->setEntry<int>("gc_opponent_set_play_search_direction", 0);
-            }
         }
     }
 

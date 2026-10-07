@@ -34,6 +34,14 @@ struct FieldDimensions
 const FieldDimensions FD_KIDSIZE{9, 6, 1.5, 2.6, 0.75, 2, 5, 1, 3};
 // const FieldDimensions FD_ADULTSIZE{14, 9, 2.1, 2.6, 1.5, 3, 6, 1, 4};
 const FieldDimensions FD_ADULTSIZE{14.16, 9.22, 2.242, 2.6, 1.54, 3.24, 6.192, 1.345, 4};
+// CAA 中型组比赛场地图示尺寸（所有距离单位均为 m）。
+const FieldDimensions FD_CAASIZE{14, 9, 2.1, 3, 1.5, 3, 6, 1, 4};
+// 图中还有下列尺寸，当前 FieldDimensions 不参与这些项目的策略计算。
+constexpr double CAA_FIELD_LINE_WIDTH = 0.08;
+constexpr double CAA_MARK_DIAMETER = 0.10;
+constexpr double CAA_CORNER_ARC_RADIUS = 0.50;
+constexpr double CAA_GOAL_DEPTH = 1.0;
+constexpr double CAA_OUTER_MARGIN = 2.0;
 // const FieldDimensions FD_ROBOLEAGUE{22, 14, 3.6, 2.6, 2, 2.25, 6.9, 0.75, 3.9};
 // const FieldDimensions FD_ROBOLEAGUE{22, 14, 3.5, 2.6, 2, 5, 8, 2, 5};
 const FieldDimensions FD_ROBOLEAGUE{22.003, 14.126, 3.635, 2.6, 1.99, 5.221, 8.121, 2.307, 5.083};

@@ -243,7 +243,7 @@ void BrainConfig::handle()
         throw invalid_argument("[Error] player_id must be one of [1, .. 11]. Got: " + to_string(playerId));
     }
 
-    // fieldType [adult_size, kid_size]
+    // fieldType [adult_size, kid_size, CAA_size, robo_league]
     if (fieldType == "adult_size")
     {
         fieldDimensions = FD_ADULTSIZE;
@@ -252,13 +252,17 @@ void BrainConfig::handle()
     {
         fieldDimensions = FD_KIDSIZE;
     }
-        else if (fieldType == "robo_league")
+    else if (fieldType == "CAA_size")
+    {
+        fieldDimensions = FD_CAASIZE;
+    }
+    else if (fieldType == "robo_league")
     {
         fieldDimensions = FD_ROBOLEAGUE;
     }
     else
     {
-        throw invalid_argument("[Error] fieldType must be one of [adult_size, kid_size, robo_league]. Got: " + fieldType);
+        throw invalid_argument("[Error] fieldType must be one of [adult_size, kid_size, CAA_size, robo_league]. Got: " + fieldType);
     }
 
     string getUpVersionLower;
