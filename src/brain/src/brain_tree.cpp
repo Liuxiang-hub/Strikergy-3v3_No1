@@ -2858,7 +2858,12 @@ NodeStatus RLVisionKick::onRunning()
                     recordExitTime();
                     return NodeStatus::SUCCESS;
                 }
-                brain->client->RLVisionKick(true);
+                const bool ownCornerPass =
+                    brain->data->realGameSubState == "CORNER_KICK" &&
+                    brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+                    brain->tree->getEntry<bool>("setplay_is_attacker") &&
+                    brain->tree->getEntry<bool>("setplay_attack_active");
+                brain->client->RLVisionKick(true, ownCornerPass ? "kV1" : "");
                 _headScanStartTime = brain->get_clock()->now();
                 _visionKickStarted = true;
             }
@@ -4849,11 +4854,18 @@ NodeStatus GoToReadyPosition::tick()
             strikerRank = std::clamp(strikerRank, 0, 3);
         }
         if (strikerRank == 0) {
-            tx = isKickoff ? - fd.circleRadius : -2.3;
-            ty = 0.0;
+            if (isKickoff) {
+                // 我方开球：1号站在 (-1.5, 1.0)，朝向中点处的足球。
+                tx = -1.5;
+                ty = 1.0;
+                ttheta = std::atan2(-ty, -tx);
+            } else {
+                tx = -2.3;
+                ty = 0.0;
+            }
         } else if (strikerRank == 1) {
             tx = isKickoff ? - fd.circleRadius + 1.0 : -4.5;
-            ty = isKickoff ? -2.5 : -0.5;
+            ty = isKickoff ? -3.5 : -0.5;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
             //ty = fd.goalAreaWidth / 2.0;

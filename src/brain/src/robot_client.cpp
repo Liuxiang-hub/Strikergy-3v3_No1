@@ -123,7 +123,7 @@ int RobotClient::fancyKickBall(double kick_speed, double kick_dir, bool cancel)
     return call(msg);
 }
 
-int RobotClient::RLVisionKick(bool start)
+int RobotClient::RLVisionKick(bool start, const string &versionOverride)
 {
     booster_interface::msg::BoosterApiReqMsg msg;
     // 目标机器人的运控协议已支持 2038，但本工程随带的较旧 SDK
@@ -131,9 +131,21 @@ int RobotClient::RLVisionKick(bool start)
     msg.api_id = kApiIdEnableVisualKickMode;
     nlohmann::json body;
     body["start"] = start;
+    string requestedVersion;
+    if (start) {
+        requestedVersion = versionOverride.empty()
+            ? brain->config->RLVisionKickVisualKickVersion
+            : versionOverride;
+        _activeVisualKickVersion = requestedVersion;
+    } else {
+        requestedVersion = _activeVisualKickVersion.empty()
+            ? brain->config->RLVisionKickVisualKickVersion
+            : _activeVisualKickVersion;
+    }
+
     std::string verLower;
-    verLower.reserve(brain->config->RLVisionKickVisualKickVersion.size());
-    for (unsigned char c : brain->config->RLVisionKickVisualKickVersion) {
+    verLower.reserve(requestedVersion.size());
+    for (unsigned char c : requestedVersion) {
         verLower.push_back(static_cast<char>(std::tolower(c)));
     }
     int visualKickVersion = 1; // SDK 协议: kV1=0, kV2=1
@@ -144,8 +156,12 @@ int RobotClient::RLVisionKick(bool start)
     }
     body["version"] = visualKickVersion;
     msg.body = body.dump();
-    std::cout << "RobotClient::RLVisionKick called with start=" << (start ? "true" : "false") << std::endl;
-    return call(msg);
+    std::cout << "RobotClient::RLVisionKick called with start="
+              << (start ? "true" : "false")
+              << ", version=" << requestedVersion << std::endl;
+    const int result = call(msg);
+    if (!start) _activeVisualKickVersion.clear();
+    return result;
 }
 
 int RobotClient::robocupWalk()

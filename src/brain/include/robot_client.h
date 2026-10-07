@@ -121,7 +121,7 @@ public:
     /**
      * @brief 切换到rl结合视觉的踢球
      */
-    int RLVisionKick(bool start = true);
+    int RLVisionKick(bool start = true, const string &versionOverride = "");
 
     /**
      * @brief 切换到robocup步态
@@ -146,6 +146,8 @@ public:
 
 private:
     int call(booster_interface::msg::BoosterApiReqMsg msg);
+    // 退出 VisualKick 时沿用本次启动版本，避免 kV1 启动后用默认 kV2 发送停止命令。
+    string _activeVisualKickVersion;
     rclcpp::Publisher<booster_msgs::msg::RpcReqMsg>::SharedPtr publisher;
     Brain *brain;
     double _vx, _vy, _vtheta;
