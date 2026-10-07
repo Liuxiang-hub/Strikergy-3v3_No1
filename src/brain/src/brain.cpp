@@ -195,6 +195,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
 
     declare_parameter<double>("RLVisionKick.goalie_clearance_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.5);
+    declare_parameter<double>("RLVisionKick.own_kickoff_power", 2.0);
 
     declare_parameter<int>("obstacle_avoidance.depth_sample_step", 16);
     declare_parameter<double>("obstacle_avoidance.obstacle_min_height", 0.15);
@@ -555,8 +556,17 @@ void Brain::pubKickMsg() {
         tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         tree->getEntry<bool>("setplay_is_attacker") &&
         tree->getEntry<bool>("setplay_support_ready");
+    const bool ownKickoffPass =
+        data->isKickingOff &&
+        tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        tree->getEntry<bool>("gc_kickoff_active");
     double goal_x = ownSetPlayPass ? 0.0 : config->fieldDimensions.length / 2;
     double goal_y = 0.0;
+    if (ownKickoffPass) {
+        // 我方中圈开球固定沿场地 y 负方向，目标点落在同 x 的负侧边线。
+        goal_x = ballField.x;
+        goal_y = -config->fieldDimensions.width / 2.0;
+    }
     const double clearanceDir = kick_geometry::directionToOpponentGoal(
         ballField.x, ballField.y, goal_x);
     kickMsg.dir = toPInPI((goalieVisualKick ? clearanceDir : data->kickDir)
@@ -579,6 +589,8 @@ void Brain::pubKickMsg() {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
     } else if (ownSetPlayPass) {
         power = get_parameter("RLVisionKick.own_setplay_pass_power").as_double();
+    } else if (ownKickoffPass) {
+        power = get_parameter("RLVisionKick.own_kickoff_power").as_double();
     } else if (normalContest && data->tmImLead) {
         const double centerCircleBoostRadius =
             config->fieldDimensions.circleRadius + 1.0;

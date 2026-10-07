@@ -1969,7 +1969,13 @@ NodeStatus CalcKickDir::tick()
     double nextKickDir = shootDir;
     auto color = 0x00FF00FF;
 
-    if (
+    if (brain->data->isKickingOff) {
+        // 我方中圈开球固定向场地 y 负方向横传。
+        nextKickType = "visual_kick";
+        nextKickDir = -M_PI / 2.0;
+        color = 0xFF00FFFF;
+    }
+    else if (
         brain->data->realGameSubState == "CORNER_KICK"
         && brain->data->isFreekickKickingOff
     ) {
@@ -2171,10 +2177,11 @@ NodeStatus StrikerDecide::tick() {
     log(format("kickValue: %.1f, threatLevel: %.1f", kickValue, threatLevel));
 
     const auto &fieldDimensions = brain->config->fieldDimensions;
-    const bool ballInOpponentPenaltyArea =
-        ball.posToField.x >= fieldDimensions.length / 2.0 - fieldDimensions.penaltyAreaLength &&
+    // 仅在对方小禁区内禁止普通自动 VisualKick；大禁区内、小禁区外仍可使用。
+    const bool ballInOpponentGoalArea =
+        ball.posToField.x >= fieldDimensions.length / 2.0 - fieldDimensions.goalAreaLength &&
         ball.posToField.x <= fieldDimensions.length / 2.0 &&
-        fabs(ball.posToField.y) <= fieldDimensions.penaltyAreaWidth / 2.0;
+        fabs(ball.posToField.y) <= fieldDimensions.goalAreaWidth / 2.0;
      
 
     string newDecision;
@@ -2184,7 +2191,7 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmImLead &&
         brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
-        !ballInOpponentPenaltyArea &&
+        !ballInOpponentGoalArea &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
@@ -2211,7 +2218,7 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmMyCostRank == 0 &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
-        !ballInOpponentPenaltyArea &&
+        !ballInOpponentGoalArea &&
         !powerShootPossible &&
         brain->data->tmMyCost < 7.0 &&
         ballRange < autoVisualKickEnableDistMax &&
