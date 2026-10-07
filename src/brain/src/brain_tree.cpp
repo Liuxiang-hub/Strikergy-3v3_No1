@@ -294,6 +294,7 @@ void BrainTree::initEntry()
     setEntry<double>("setplay_support_target_y", 0.0);
     setEntry<bool>("setplay_kick_done", false);
     setEntry<bool>("setplay_powerkick", false);
+    setEntry<bool>("setplay_attack_active", false);
 
     // 自动视觉校准相关
     setEntry<string>("calibrate_state", "pitch");
@@ -1065,6 +1066,10 @@ NodeStatus GoToFreekickPosition::onRunning() {
         brain->data->realGameSubState == "GOAL_KICK" &&
         brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         side == "attack";
+    const int setPlayRemainingSeconds =
+        brain->tree->getEntry<int>("gc_secondary_time");
+    const bool forceSetPlayKick =
+        setPlayRemainingSeconds > 0 && setPlayRemainingSeconds < 15;
     if (ownGoalKickSetPlay) {
         const int selfIdx = brain->config->playerId - 1;
         const int selfId = brain->config->playerId;
@@ -1093,6 +1098,10 @@ NodeStatus GoToFreekickPosition::onRunning() {
 
         const bool isAttacker = attackerId == selfId;
         brain->tree->setEntry<bool>("setplay_is_attacker", isAttacker);
+        if (isAttacker && brain->tree->getEntry<bool>("setplay_attack_active")) {
+            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            return NodeStatus::SUCCESS;
+        }
 
         // 两台机器人使用同一个锁定接应点，避免球的 y 在零附近抖动时来回换边。
         double supportTargetY = brain->tree->getEntry<double>("setplay_support_target_y");
@@ -1105,11 +1114,12 @@ NodeStatus GoToFreekickPosition::onRunning() {
         brain->data->kickDir = passDir;
         Pose2D targetPose{};
         if (isAttacker) {
-            // 主罚者退到“球 -> 中心点”方向的正后方 0.5 m，并面向中心点。
+            // 等待阶段先站到球前方（球与中心点之间），满足开球条件后再交给
+            // 正常拼抢 attacker 的追球、绕球和 Adjust 流程处理。
             constexpr double behindBallDistance = 0.5;
-            targetPose.x = ballPos.x - behindBallDistance * cos(passDir);
-            targetPose.y = ballPos.y - behindBallDistance * sin(passDir);
-            targetPose.theta = passDir;
+            targetPose.x = ballPos.x + behindBallDistance * cos(passDir);
+            targetPose.y = ballPos.y + behindBallDistance * sin(passDir);
+            targetPose.theta = toPInPI(passDir + M_PI);
         } else {
             targetPose.x = 0.0;
             targetPose.y = supportTargetY;
@@ -1136,10 +1146,16 @@ NodeStatus GoToFreekickPosition::onRunning() {
                 if (supportReady) break;
             }
             brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
-            if (!supportReady) return NodeStatus::RUNNING;
+            if (!supportReady && !forceSetPlayKick) return NodeStatus::RUNNING;
+            if (!supportReady && forceSetPlayKick) {
+                log(format("goal kick forced: %d seconds remaining",
+                           setPlayRemainingSeconds));
+            }
 
-            // 后续行为树进入 RLVisionKick；pubKickMsg 会将本场景力度固定为 5.5。
-            brain->data->kickType = "visual_kick";
+            // 后续进入与正常拼抢完全相同的 attacker 决策链，仅固定瞄准中心点。
+            brain->tree->setEntry<bool>("setplay_attack_active", true);
+            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            brain->data->kickType = "shoot";
             brain->tree->setEntry<bool>("setplay_powerkick", false);
             return NodeStatus::SUCCESS;
         }
@@ -1177,6 +1193,10 @@ NodeStatus GoToFreekickPosition::onRunning() {
         }
         _cornerAttacker = attackerId == selfId;
         brain->tree->setEntry<bool>("setplay_is_attacker", _cornerAttacker);
+        if (_cornerAttacker && brain->tree->getEntry<bool>("setplay_attack_active")) {
+            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            return NodeStatus::SUCCESS;
+        }
 
         Pose2D targetPose{};
         if (!_cornerAttacker) {
@@ -1184,9 +1204,11 @@ NodeStatus GoToFreekickPosition::onRunning() {
         } else {
             const double len = std::max(1e-3, norm(ballPos.x, ballPos.y));
             constexpr double behindBallDistance = 0.5;
-            targetPose.x = ballPos.x + behindBallDistance * ballPos.x / len;
-            targetPose.y = ballPos.y + behindBallDistance * ballPos.y / len;
-            targetPose.theta = atan2(-ballPos.y, -ballPos.x);
+            // 球前方是球与中心点之间；等待时面向足球。
+            targetPose.x = ballPos.x - behindBallDistance * ballPos.x / len;
+            targetPose.y = ballPos.y - behindBallDistance * ballPos.y / len;
+            targetPose.theta = atan2(ballPos.y - targetPose.y,
+                                     ballPos.x - targetPose.x);
         }
         const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
         const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
@@ -1200,13 +1222,19 @@ NodeStatus GoToFreekickPosition::onRunning() {
                 if (brain->data->tmStatus[i].role != "striker" &&
                     brain->data->tmStatus[i].role != "supporter") continue;
                 const auto &tm = brain->data->tmStatus[i].robotPoseToField;
-                supportReady = norm(tm.x + 2.0, tm.y) < 0.40 && fabs(toPInPI(tm.theta)) < 0.30;
+                supportReady = norm(tm.x + 2.0, tm.y) < 2.0 && fabs(toPInPI(tm.theta)) < 0.5;
                 if (supportReady) break;
             }
             brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
-            if (!supportReady) return NodeStatus::RUNNING;
+            if (!supportReady && !forceSetPlayKick) return NodeStatus::RUNNING;
+            if (!supportReady && forceSetPlayKick) {
+                log(format("%s forced: %d seconds remaining",
+                           brain->data->realGameSubState.c_str(),
+                           setPlayRemainingSeconds));
+            }
+            brain->tree->setEntry<bool>("setplay_attack_active", true);
             brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
-            brain->data->kickType = "visual_kick";
+            brain->data->kickType = "shoot";
             brain->tree->setEntry<bool>("setplay_powerkick", false);
             return NodeStatus::SUCCESS;
         }
@@ -1963,11 +1991,20 @@ NodeStatus CalcKickDir::tick()
         }
     }
 
+    const bool setPlayAttackActive =
+        brain->tree->getEntry<bool>("setplay_attack_active");
     string nextKickType = "shoot";
     double nextKickDir = shootDir;
     auto color = 0x00FF00FF;
 
-    if (brain->data->isKickingOff) {
+    if (setPlayAttackActive) {
+        // 定位球等待结束后复用正常 attacker 全流程，但瞄准点始终固定为 (0, 0)。
+        nextKickType = "shoot";
+        nextKickDir = kick_geometry::directionToTarget(
+            bPos.x, bPos.y, 0.0, 0.0, shootDir);
+        color = 0xFF00FFFF;
+    }
+    else if (brain->data->isKickingOff) {
         // 我方中圈开球固定向场地 y 负方向横传。
         nextKickType = "visual_kick";
         nextKickDir = -M_PI / 2.0;
@@ -2010,7 +2047,7 @@ NodeStatus CalcKickDir::tick()
     const bool ballInsideInsetGoalposts =
         absBallY <= std::max(0.0, halfGoalWidth - kGoalpostInset) &&
         bPos.x >= 6.0;
-    if (ballInsideInsetGoalposts) {
+    if (ballInsideInsetGoalposts && !setPlayAttackActive) {
         nextKickDir = 0.0;
     }
 
@@ -2067,6 +2104,8 @@ NodeStatus StrikerDecide::tick() {
     brain->get_parameter("strategy.auto_visual_kick_max_direction_error", autoVisualKickMaxDirectionError);
     autoVisualKickMaxDirectionError = std::clamp(
         autoVisualKickMaxDirectionError, 0.05, M_PI);
+    const bool setPlayAttackActive =
+        brain->tree->getEntry<bool>("setplay_attack_active");
 
     const bool kickoffPhase = kickoffTacticalPhase(brain);
     const bool kickoffBallKnown =
@@ -2136,7 +2175,8 @@ NodeStatus StrikerDecide::tick() {
         && ballX < powerShootXMax
         && ballY > powerShootYMin
         && ballY < powerShootYMax
-        && (!brain->data->isFreekickKickingOff || usePowerShootForKickoff);
+        && (!brain->data->isFreekickKickingOff || usePowerShootForKickoff ||
+            setPlayAttackActive);
 
 
     bool avoidPushing;
@@ -2186,8 +2226,8 @@ NodeStatus StrikerDecide::tick() {
     auto color = 0xFFFFFFFF; // for log
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
-        brain->data->tmImLead &&
-        brain->data->tmMyCostRank == 0 &&
+        (setPlayAttackActive ||
+         (brain->data->tmImLead && brain->data->tmMyCostRank == 0)) &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
         visualKickDirectionReady &&
@@ -2212,13 +2252,13 @@ NodeStatus StrikerDecide::tick() {
     }
     else if (
         enableAutoVisualKick &&
-        brain->data->tmImLead &&
-        brain->data->tmMyCostRank == 0 &&
+        (setPlayAttackActive ||
+         (brain->data->tmImLead && brain->data->tmMyCostRank == 0)) &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
         !ballInOpponentGoalArea &&
         !powerShootPossible &&
-        brain->data->tmMyCost < 7.0 &&
+        (setPlayAttackActive || brain->data->tmMyCost < 7.0) &&
         ballRange < autoVisualKickEnableDistMax &&
         ballRange > autoVisualKickEnableDistMin &&
         fabs(ballYaw) < autoVisualKickEnableAngle * 1.3 &&
@@ -2231,7 +2271,7 @@ NodeStatus StrikerDecide::tick() {
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
         color = 0xFF00FFFF;
-    } else if (!brain->data->tmImLead && !kickoffAttack) {
+    } else if (!setPlayAttackActive && !brain->data->tmImLead && !kickoffAttack) {
         newDecision = "assist";
         color = 0x00FFFFFF;
     }
@@ -2242,7 +2282,8 @@ NodeStatus StrikerDecide::tick() {
     } 
     else if (
         (
-            (angleGoodForKick && !brain->data->isFreekickKickingOff) 
+            (angleGoodForKick &&
+             (!brain->data->isFreekickKickingOff || setPlayAttackActive))
             || reachedKickDir
         )
         && !avoidKick
@@ -2679,7 +2720,6 @@ NodeStatus Kick::onRunning()
             if (brain->tree->getEntry<bool>("setplay_powerkick")) {
                 brain->tree->setEntry<bool>("setplay_powerkick", false);
                 brain->tree->setEntry<bool>("setplay_attac_backed", false);
-                brain->tree->setEntry<bool>("setplay_kick_done", true);
             }
             return NodeStatus::SUCCESS;
         }
@@ -2766,19 +2806,6 @@ NodeStatus RLVisionKick::onRunning()
 
     const bool goalieKick = brain->tree->getEntry<bool>("goalie_block_kick_active");
     auto clearState = [&]() {
-        const bool ownStructuredSetPlay =
-            brain->data->realGameSubState == "GOAL_KICK" ||
-            brain->data->realGameSubState == "CORNER_KICK" ||
-            brain->data->realGameSubState == "THROW_IN";
-        const bool completedOwnSetPlayPass =
-            _visionKickStarted &&
-            ownStructuredSetPlay &&
-            brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
-            brain->tree->getEntry<bool>("setplay_is_attacker") &&
-            brain->tree->getEntry<bool>("setplay_support_ready");
-        if (completedOwnSetPlayPass) {
-            brain->tree->setEntry<bool>("setplay_kick_done", true);
-        }
         brain->data->tmImInVisualKick = false;
         brain->tree->setEntry<bool>("goalie_block_kick_active", false);
         brain->data->goalieVisualKickSubState = "none";

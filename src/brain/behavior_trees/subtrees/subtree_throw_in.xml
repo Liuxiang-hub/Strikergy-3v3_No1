@@ -5,14 +5,14 @@
                 <GoalieIdleHome dist_to_goalline="1.0" vx_limit="0.7" vy_limit="0.5"
                     pos_tolerance="0.45" theta_tolerance="0.40" />
             </ReactiveSequence>
-            <ReactiveSequence _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY' &amp;&amp; !setplay_kick_done">
+            <ReactiveSequence _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; gc_game_state=='PLAY'">
                 <!-- 我方界外球恢复后，球位未知时先找球，再计算站位。 -->
                 <SubTree ID="FindBall" _autoremap="true"
                     _while="!(ball_location_known || tm_ball_pos_reliable)" />
                 <CalcKickDir />
                 <GoToFreekickPosition _while="player_role == 'striker' || player_role == 'supporter'" side="attack" vx_limit="0.7" vy_limit="0.5" />
-                <RLVisionKick _while="setplay_is_attacker &amp;&amp; setplay_support_ready"
-                    min_msec_kick="1500" max_msec_kick="7000" range="6.0" />
+                <SubTree ID="StrikerPlay" _autoremap="true"
+                    _while="setplay_is_attacker &amp;&amp; setplay_attack_active" />
             </ReactiveSequence>
             <ReactiveSequence _while="gc_game_sub_state_type=='FREE_KICK' &amp;&amp; gc_game_sub_state=='GET_READY'">
                 <!-- 我方/对方界外球在进入后续站位策略前，先确保至少获得视觉或队友球位。 -->

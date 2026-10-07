@@ -2484,6 +2484,7 @@ void Brain::applyGameControlMessage(
         tree->setEntry<double>("setplay_support_target_y", 0.0);
         tree->setEntry<bool>("setplay_kick_done", false);
         tree->setEntry<bool>("setplay_powerkick", false);
+        tree->setEntry<bool>("setplay_attack_active", false);
         data->isFreekickKickingOff = false;
         data->isDirectShoot = false;
         tree->setEntry<int>("gc_opponent_set_play_search_direction", 0);
