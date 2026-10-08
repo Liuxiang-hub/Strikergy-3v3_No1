@@ -2898,9 +2898,21 @@ NodeStatus RLVisionKick::onRunning()
                     (brain->data->realGameSubState == "NONE" ||
                      brain->data->realGameSubState == "OVERTIME") &&
                     !goalieKick;
-                // NORMAL 拼抢统一尝试 kV1；定位球的现有覆盖规则保持不变。
-                const string visualKickVersion =
-                    (normalContest || ownCornerPass) ? "kV1" : "";
+                // NORMAL 拼抢的动作版本与力度区域保持一致：
+                // 中圈半径 + 1 m 内、或己方半场使用力度 6 + kV2；
+                // 对方半场且在上述中圈范围外使用力度 5 + kV1。
+                string visualKickVersion;
+                if (normalContest) {
+                    const auto &ballField = brain->data->ball.posToField;
+                    const double centerCircleBoostRadius =
+                        brain->config->fieldDimensions.circleRadius + 1.0;
+                    const bool powerSixRegion =
+                        std::hypot(ballField.x, ballField.y) <= centerCircleBoostRadius ||
+                        ballField.x < 0.0;
+                    visualKickVersion = powerSixRegion ? "kV2" : "kV1";
+                } else if (ownCornerPass) {
+                    visualKickVersion = "kV1";
+                }
                 brain->client->RLVisionKick(true, visualKickVersion);
                 _headScanStartTime = brain->get_clock()->now();
                 _visionKickStarted = true;
