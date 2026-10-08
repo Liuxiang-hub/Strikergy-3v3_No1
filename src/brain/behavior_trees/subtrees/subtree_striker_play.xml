@@ -32,12 +32,13 @@
                   <!-- <CamTrackBall /> -->
                   <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
                   <CalcKickDir />
+                  <!-- 必须在动作 Sequence 外：即使 Assist/Kick/VisualKick 正在
+                       RUNNING，也每帧重算角色决策。旧动作的 _while 变为 false
+                       时执行 halt，停止旧速度/VisualKick 后再切换动作。 -->
+                  <StrikerDecide decision_out="{decision}" decision_in="{decision}" chase_threshold="1.0" />
                   <Sequence>
-                     <ReactiveSequence>
-                        <StrikerDecide decision_out="{decision}" decision_in="{decision}" chase_threshold="1.0" />
                         <!-- 比赛中丢球时统一执行：快扫、转满一周、分区导航、到位继续旋转。 -->
                         <SubTree ID="FindBall" _while="decision == 'find'" _autoremap="true" />
-                     </ReactiveSequence>
                         <KickoffStand _while="decision == 'kickoff_hold'" dist_tolerance="0.5" theta_tolerance="0.2" vx_limit="0.6" vy_limit="0.5" hold_vtheta_limit="0.6" />
                         <Assist _while="decision == 'assist'" vx_limit = "1.2" vy_limit="0.6" />
                         <!-- <Chase3   _while="decision == 'chase'"  vx_limit="1.5"  vy_limit="0.3"  vtheta_limit="1.5"  dist="0.4" safe_dist="0.6" /> -->

@@ -24,6 +24,18 @@ constexpr double kVisionKickHeadScanPitch = 0.4;
 constexpr double kVisionKickHeadDownPitch = 0.7;
 constexpr double kVisionKickHeadCommandIntervalMs = 100.0;
 
+// 与 handleCooperation 的 NORMAL 选举阶段保持一致；定位球和守门员不受影响。
+bool normalFieldPlayerOwnershipPhase(Brain *brain)
+{
+    const string role = brain->tree->getEntry<string>("player_role");
+    const string subState = brain->tree->getEntry<string>("gc_real_game_sub_state");
+    return (role == "striker" || role == "supporter") &&
+        brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        !brain->tree->getEntry<bool>("setplay_attack_active") &&
+        (subState == "NONE" || subState == "OVERTIME");
+}
+
 double visualKickRealBallHoldMs(Brain *brain)
 {
     double value = 1000.0;
@@ -2072,6 +2084,11 @@ NodeStatus StrikerDecide::tick() {
         brain->tree->getEntry<bool>("setplay_attack_active");
 
     const bool kickoffPhase = kickoffTacticalPhase(brain);
+    const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
+    // NORMAL 的进攻权限只认统一选举结果，不再同时要求旧成本排名第一。
+    const bool visualKickOwner = setPlayAttackActive ||
+        (brain->data->tmImLead &&
+         (normalOwnerPhase || brain->data->tmMyCostRank == 0));
     const bool kickoffBallKnown =
         brain->tree->getEntry<bool>("ball_location_known") ||
         brain->tree->getEntry<bool>("tm_ball_pos_reliable");
@@ -2109,6 +2126,24 @@ NodeStatus StrikerDecide::tick() {
         brain->log->logToScreen(
             "tree/value_threat", "Threat Level: unavailable, Kick Value: unavailable",
             0xFFFFFFFF, 60);
+        return NodeStatus::SUCCESS;
+    }
+
+    if (normalOwnerPhase && !brain->data->tmImLead) {
+        // 球位有效但未当选：只能接应，不能落入普通 chase/adjust/kick 分支。
+        brain->data->tmImInVisualKick = false;
+        hasLastDeltaDir = false;
+        setOutput("decision_out", string("assist"));
+        log("NORMAL ownership: support (unified election, cost rank ignored)");
+        brain->log->logToScreen("tree/Decide", "Decision: assist (NORMAL support)", 0x00FFFFFF);
+        return NodeStatus::SUCCESS;
+    }
+
+    if (normalOwnerPhase && brain->data->tmImLead &&
+        lastDecision == "auto_visual_kick" && brain->data->tmImInVisualKick) {
+        // 每帧仍检查角色，但未失去球权时，让已启动的 VisualKick 自己处理
+        // 完成/超时/球位异常，避免入场几何条件的抖动反复中断封装动作。
+        setOutput("decision_out", string("auto_visual_kick"));
         return NodeStatus::SUCCESS;
     }
 
@@ -2195,8 +2230,7 @@ NodeStatus StrikerDecide::tick() {
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
         !ownKickoffPlayer2Hold &&
-        (setPlayAttackActive ||
-         (brain->data->tmImLead && brain->data->tmMyCostRank == 0)) &&
+        visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
         visualKickDirectionReady &&
@@ -2221,8 +2255,7 @@ NodeStatus StrikerDecide::tick() {
     }
     else if (
         enableAutoVisualKick &&
-        (setPlayAttackActive ||
-         (brain->data->tmImLead && brain->data->tmMyCostRank == 0)) &&
+        visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
         !ballInOpponentGoalArea &&
@@ -2246,9 +2279,7 @@ NodeStatus StrikerDecide::tick() {
         brain->data->tmMyCostRank > 0 &&
         !kickoffAttack
     ) {
-        // NORMAL 中只有明确不是第一成本排名的机器人才能进入 Assist。
-        // CostRank==0 即使因队友通信延迟暂时 tmImLead=false，也必须留在
-        // attacker 的 chase/adjust/kick 链，不能误走球后 2 m 接应路线。
+        // 非 NORMAL 阶段保留原有分工；NORMAL 已在前面的统一球权判断中处理。
         newDecision = "assist";
         color = 0x00FFFFFF;
     }
@@ -2719,6 +2750,10 @@ NodeStatus Kick::onRunning()
 
 void Kick::onHalted()
 {
+    // 角色或决策变化时不能留下上一帧的推踢速度。
+    brain->client->setVelocity(0.0, 0.0, 0.0, false, false, false);
+    _state = "kick";
+    _speed = 0.0;
     _startTime -= rclcpp::Duration(100, 0);
 }
 
@@ -2970,7 +3005,8 @@ NodeStatus RLVisionKick::onRunning()
     double yieldMyCostMin = 4.0;
     brain->get_parameter("strategy.auto_visual_kick.max_parallel_count", maxParallel);
     brain->get_parameter("strategy.auto_visual_kick.yield_my_cost_min", yieldMyCostMin);
-    const bool shouldYield = teammateWinsVisualKick &&
+    const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
+    const bool shouldYield = !normalOwnerPhase && teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     double ownershipGraceMs = 1000.0;
@@ -2992,7 +3028,10 @@ NodeStatus RLVisionKick::onRunning()
     const bool elapsedEnough = elapsed > minMsecKick;
     if (brain->tree->getEntry<bool>("ball_out")) return beginExit("ball out");
     if (_badPoseConsecutiveCount >= kVisionKickBadPoseMaxTicks) return beginExit("bad ball pose");
-    if (teammateExplicitlyLead) {
+    if (normalOwnerPhase && !brain->data->tmImLead) {
+        return beginExit("lost NORMAL ownership election");
+    }
+    if (!normalOwnerPhase && teammateExplicitlyLead) {
         return beginExit(format("teammate %d took team ball ownership", explicitLeaderId));
     }
     if (shouldYield) return beginExit("teammate wins visual-kick slot");

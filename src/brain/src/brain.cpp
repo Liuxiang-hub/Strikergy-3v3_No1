@@ -1226,9 +1226,14 @@ void Brain::handleCooperation() {
     if (cmd != 0) {
         log_(format("received cmd %d from teammate", cmd));
         if (cmd == 100) { // 队友要控球
-            data->tmImLead = false;
-            tree->setEntry<bool>("is_lead", false);
-            log_("teammate wants to take lead, i'll assist");
+            if (normalOwnerPhase) {
+                // NORMAL 球权由评分/迟滞选举统一决定，旧抢球命令不得再次改写。
+                log_("NORMAL: ignore legacy take-lead command, keep elected owner");
+            } else {
+                data->tmImLead = false;
+                tree->setEntry<bool>("is_lead", false);
+                log_("teammate wants to take lead, i'll assist");
+            }
         } else if (cmd > 10 && cmd < 20) { 
             log_("goalie wants to attack");
             int newGoalieId = cmd - 10;
