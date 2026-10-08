@@ -114,8 +114,8 @@ brain_node:
         field_target_x_ratio: 0.25   # 场上机器人搜索目标 |x| = 场长 * 此比例
         lane_y_ratio: 0.28           # 按 player_id 分配横向搜索通道
         max_move_secs: 30.0
-        vx_limit: 0.7
-        vy_limit: 0.4
+        vx_limit: 2.0
+        vy_limit: 0.8
       set_play_stand:
         corridor_half_width: 0.6     # 我方角球/门球时，判断是否挡住开球通道的半宽 (m)
         corridor_forward_range: 3.0  # 开球通道沿 kickDir 方向的有效长度 (m)

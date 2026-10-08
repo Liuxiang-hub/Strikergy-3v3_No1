@@ -220,8 +220,8 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.far_set_play_search.field_target_x_ratio", 0.25);
     declare_parameter<double>("strategy.far_set_play_search.lane_y_ratio", 0.28);
     declare_parameter<double>("strategy.far_set_play_search.max_move_secs", 30.0);
-    declare_parameter<double>("strategy.far_set_play_search.vx_limit", 0.7);
-    declare_parameter<double>("strategy.far_set_play_search.vy_limit", 0.4);
+    declare_parameter<double>("strategy.far_set_play_search.vx_limit", 2.0);
+    declare_parameter<double>("strategy.far_set_play_search.vy_limit", 0.8);
     declare_parameter<double>("strategy.set_play_stand.corridor_half_width", 0.6);
     declare_parameter<double>("strategy.set_play_stand.corridor_forward_range", 3.0);
     declare_parameter<double>("strategy.set_play_stand.side_margin", 0.2);
@@ -1018,14 +1018,29 @@ void Brain::handleCooperation() {
     const bool kickoffTacticalPhase =
         (data->isKickingOff || data->isOpponentKickingOff) &&
         tree->getEntry<string>("gc_game_state") == "PLAY";
+    auto kickoffPlayerAlive = [&](int playerId) {
+        if (playerId < 1 || playerId > numOfPlayers ||
+            playerId > HL_MAX_NUM_PLAYERS) return false;
+        if (playerId == selfId) return data->tmImAlive;
+        return data->tmStatus[playerId - 1].isAlive;
+    };
+    const bool fixedOwnKickoffPair =
+        kickoffTacticalPhase &&
+        data->isKickingOff &&
+        numOfPlayers == 3 &&
+        kickoffPlayerAlive(1) &&
+        kickoffPlayerAlive(2);
     if (!data->isKickingOff && !data->isOpponentKickingOff) {
         data->kickoffStrikerGroupRank = -1;
         data->kickoffStrikerGroupLatched = false;
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 开球阶段只在第一次进入 PLAY 时确定分组，避免 cost 变化导致机器人互换半区任务。
-        data->kickoffStrikerGroupRank = myStrikerCostRank;
+        // 3v3 我方开球且 1、2 号都在线时，固定 1 号主罚、2 号等待，
+        // 不允许进入 PLAY 瞬间的 cost 排名改变开球者。缺人时才动态排序。
+        data->kickoffStrikerGroupRank = fixedOwnKickoffPair
+            ? (selfId == 1 ? 0 : (selfId == 2 ? 1 : myStrikerCostRank))
+            : myStrikerCostRank;
         data->kickoffStrikerGroupLatched = true;
     }
 
@@ -1058,9 +1073,9 @@ void Brain::handleCooperation() {
             finalKickDirection, robotToBallDirection) / M_PI;
         candidate.cost = fallbackCost;
         if (normalOwnerPhase && seesBall) {
-            const double effectiveDistance = candidate.rawDistance + (fallen ? 11.0 : 0.0);
-            candidate.cost = 0.9 * (effectiveDistance / 5.0) +
-                0.1 * candidate.facingScore;
+            // NORMAL 的基础球权只按距球直线距离判断。朝向只在后面的
+            // “明显更好”例外中触发切换，不再混入综合评分。
+            candidate.cost = candidate.rawDistance;
         }
         return candidate;
     };
@@ -1093,10 +1108,6 @@ void Brain::handleCooperation() {
     }
 
     auto betterOwner = [&](const BallOwnerCandidate &lhs, const BallOwnerCandidate &rhs) {
-        if (normalOwnerPhase) {
-            return lhs.cost < rhs.cost - COST_TIE_EPS ||
-                (std::fabs(lhs.cost - rhs.cost) <= COST_TIE_EPS && lhs.id < rhs.id);
-        }
         return lhs.rawDistance < rhs.rawDistance - COST_TIE_EPS ||
             (std::fabs(lhs.rawDistance - rhs.rawDistance) <= COST_TIE_EPS && lhs.id < rhs.id);
     };
@@ -1108,7 +1119,7 @@ void Brain::handleCooperation() {
     static rclcpp::Time normalAttackerLastConfirmedTime(0, 0, RCL_ROS_TIME);
     int ownerId = bestOwner.id;
     if (normalOwnerPhase) {
-        constexpr double ATTACKER_KEEP_DIST_MARGIN_M = 0.3;
+        constexpr double ATTACKER_KEEP_DIST_MARGIN_M = 0.5;
         constexpr double FACING_FORCE_SWITCH_MARGIN = 0.3;
         constexpr double FACING_FORCE_SWITCH_MAX_EXTRA_DIST_M = 1.5;
         const BallOwnerCandidate *previous = nullptr;
@@ -1118,30 +1129,49 @@ void Brain::handleCooperation() {
                 break;
             }
         }
-        if (previous != nullptr && bestOwner.id != previous->id) {
-            // 新候选者明显更近时，仍按 0.3 m 的距离迟滞正常换人。
+        if (previous != nullptr) {
+            // 基础规则：最近候选者必须至少近 0.5 m 才换人。
             const bool distanceDrivenSwitch =
+                bestOwner.id != previous->id &&
                 bestOwner.rawDistance + ATTACKER_KEEP_DIST_MARGIN_M <
                 previous->rawDistance;
 
-            // 朝向优势触发的强制换人必须同时满足：
-            // 1. 朝向评分至少比旧 attacker 好 0.3；
-            // 2. 距球最多只比旧 attacker 远 1.5 m。
-            const bool facingForceSwitch =
-                bestOwner.facingScore <=
-                    previous->facingScore - FACING_FORCE_SWITCH_MARGIN &&
-                bestOwner.rawDistance <=
-                    previous->rawDistance + FACING_FORCE_SWITCH_MAX_EXTRA_DIST_M;
+            // 朝向例外独立扫描所有候选者，不能只检查“距离最近者”。只要
+            // 朝向评分至少好 0.3（约 54°），且最多远 1.5 m，就立即切换。
+            // 多个候选同时满足时，先选朝向最好，再选距离最近、编号最小。
+            const BallOwnerCandidate *facingChallenger = nullptr;
+            for (const auto &candidate : ownerCandidates) {
+                if (candidate.id == previous->id) continue;
+                const bool qualifies =
+                    candidate.facingScore <=
+                        previous->facingScore - FACING_FORCE_SWITCH_MARGIN &&
+                    candidate.rawDistance <=
+                        previous->rawDistance + FACING_FORCE_SWITCH_MAX_EXTRA_DIST_M;
+                if (!qualifies) continue;
 
-            const bool keepPrevious =
-                !distanceDrivenSwitch && !facingForceSwitch;
-            if (keepPrevious) ownerId = previous->id;
+                const bool betterFacingChallenger =
+                    facingChallenger == nullptr ||
+                    candidate.facingScore < facingChallenger->facingScore - COST_TIE_EPS ||
+                    (std::fabs(candidate.facingScore - facingChallenger->facingScore) <= COST_TIE_EPS &&
+                     (candidate.rawDistance < facingChallenger->rawDistance - COST_TIE_EPS ||
+                      (std::fabs(candidate.rawDistance - facingChallenger->rawDistance) <= COST_TIE_EPS &&
+                       candidate.id < facingChallenger->id)));
+                if (betterFacingChallenger) facingChallenger = &candidate;
+            }
+
+            if (facingChallenger != nullptr) {
+                ownerId = facingChallenger->id;
+            } else if (distanceDrivenSwitch) {
+                ownerId = bestOwner.id;
+            } else {
+                ownerId = previous->id;
+            }
         }
 
         // VisualKick 期间视觉可能会短暂漏检一两帧。若这一帧所有场上球员都没有
         // 成为候选者，则在有限时间内保留原 attacker，避免外层决策树先于
         // RLVisionKick 的退出保护把动作直接 halt。只要出现新的有效候选者，
-        // 仍立即按正常评分/迟滞规则重新确定球权，不会把球权永久锁住。
+        // 仍立即按距离迟滞/朝向例外规则重新确定球权，不会把球权永久锁住。
         if (ownerId != 0) {
             normalAttackerLastConfirmedTime = get_clock()->now();
         } else if (normalAttackerId != 0) {
@@ -1171,6 +1201,10 @@ void Brain::handleCooperation() {
         normalAttackerId = 0;
         normalAttackerLastConfirmedTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
+    // 我方双人开球期间，球权也必须与固定分工一致。否则即使 1 号的
+    // kickoff rank 为 0，瞬时距离排名仍可能阻止它进入 VisualKick。
+    if (fixedOwnKickoffPair) ownerId = 1;
+
     data->tmImLead = data->tmImAlive && ownerId == selfId;
     tree->setEntry<bool>("is_lead", data->tmImLead);
     log_(format("ball owner: %d, myCost: %.1f, myCostRank: %d, myStrikerCostRank: %d, kickoffGroupRank: %d, myStrikerIDRank: %d",

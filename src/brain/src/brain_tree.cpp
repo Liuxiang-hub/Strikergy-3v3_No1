@@ -844,7 +844,7 @@ NodeStatus MoveToFarSetPlaySearchArea::onRunning()
         0.4,
         _vxLimit,
         _vyLimit,
-        1.2,
+        1.5,
         0.4,
         0.4,
         0.2,
@@ -2085,10 +2085,6 @@ NodeStatus StrikerDecide::tick() {
 
     const bool kickoffPhase = kickoffTacticalPhase(brain);
     const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
-    // NORMAL 的进攻权限只认统一选举结果，不再同时要求旧成本排名第一。
-    const bool visualKickOwner = setPlayAttackActive ||
-        (brain->data->tmImLead &&
-         (normalOwnerPhase || brain->data->tmMyCostRank == 0));
     const bool kickoffBallKnown =
         brain->tree->getEntry<bool>("ball_location_known") ||
         brain->tree->getEntry<bool>("tm_ball_pos_reliable");
@@ -2105,6 +2101,11 @@ NodeStatus StrikerDecide::tick() {
             ? kickoffRank == 0
             : assignedOpponentHalf == ballInOpponentHalf);
     const bool kickoffHold = kickoffPhase && (!kickoffAttack || ownKickoffPlayer2Hold);
+    // NORMAL 只认统一选举结果；开球则直接认锁存的主罚分工，不能再被
+    // 进入 PLAY 瞬间的实时成本排名挡在 VisualKick 之外。
+    const bool visualKickOwner = setPlayAttackActive || kickoffAttack ||
+        (brain->data->tmImLead &&
+         (normalOwnerPhase || brain->data->tmMyCostRank == 0));
 
     // No strategy calculation below may consume a placeholder ball. During a
     // kickoff we can still choose the latched stand group without a live ball.
