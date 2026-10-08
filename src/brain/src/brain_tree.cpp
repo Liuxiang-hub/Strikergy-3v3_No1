@@ -1522,9 +1522,7 @@ NodeStatus GoToGoalBlockingPosition::tick() {
 
 NodeStatus Assist::onStart()
 {
-    // 每次重新进入 Assist 都按当前球位重新规划，不能沿用上一次角色周期
-    // 留下的第一接应过渡点。
-    _firstWaypointActive = false;
+    // 接应目标每帧重新计算，不锁定必须到达的过渡点。
     return onRunning();
 }
 
@@ -1652,14 +1650,9 @@ NodeStatus Assist::onRunning() {
     // NORMAL Assist 每帧根据球与自身的前后关系重新计算接应点。
     // 对方球门位于 +x：球的 x 大于自身时，球比自身更靠近对方球门。
     const bool ballCloserToOpponentGoal = ballPos.x > robotPose.x;
-    if (!_firstWaypointActive && !ballCloserToOpponentGoal) {
-        _firstWaypointActive = true;
-    }
-
-    bool aimingForFirstWaypoint = _firstWaypointActive;
-    if (_firstWaypointActive) {
-        // 一旦球落到自身后方，必须先完成这个绕行点，不能在 x 刚越过球时
-        // 提前切换到“球后 2 m”，否则会斜穿球的附近。
+    if (!ballCloserToOpponentGoal) {
+        // 第一目标仅为动态过渡点；途中球一旦位于自身前方，下一帧立即
+        // 切换到球后 2 m，不要求先抵达此点。
         targetPose.x = ballPos.x - 1.0;
         targetPose.y = ballPos.y - 1.5;
         log(format("ball behind: first waypoint target=(%.2f, %.2f)",
@@ -1675,15 +1668,6 @@ NodeStatus Assist::onRunning() {
         ownGoalX + distToGoalline);
     targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7,
         -fd.width / 2.0 + 0.7);
-    if (aimingForFirstWaypoint &&
-        norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) <= distTolerance) {
-        _firstWaypointActive = false;
-        targetPose.x = cap(ballPos.x - 2.0, oppGoalX - 0.5,
-            ownGoalX + distToGoalline);
-        targetPose.y = cap(ballPos.y, fd.width / 2.0 - 0.7,
-            -fd.width / 2.0 + 0.7);
-        log("first waypoint reached: continue to 2m behind ball");
-    }
     targetPose.theta = atan2(
         ballPos.y - targetPose.y, ballPos.x - targetPose.x);
     log(format("assist target=(%.2f, %.2f) face_ball=(%.2f, %.2f)",
@@ -1751,9 +1735,7 @@ NodeStatus Assist::onRunning() {
 
 void Assist::onHalted()
 {
-    // 决策从 assist 切到 find/adjust/attacker 时，立即清除本轮路线状态，
-    // 并停止上一帧 Assist 留下的速度指令。
-    _firstWaypointActive = false;
+    // 决策离开 Assist 时停止上一帧留下的速度指令。
     brain->client->setVelocity(0.0, 0.0, 0.0);
 }
 
@@ -2258,7 +2240,15 @@ NodeStatus StrikerDecide::tick() {
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
         color = 0xFF00FFFF;
-    } else if (!setPlayAttackActive && !brain->data->tmImLead && !kickoffAttack) {
+    } else if (
+        !setPlayAttackActive &&
+        !brain->data->tmImLead &&
+        brain->data->tmMyCostRank > 0 &&
+        !kickoffAttack
+    ) {
+        // NORMAL 中只有明确不是第一成本排名的机器人才能进入 Assist。
+        // CostRank==0 即使因队友通信延迟暂时 tmImLead=false，也必须留在
+        // attacker 的 chase/adjust/kick 链，不能误走球后 2 m 接应路线。
         newDecision = "assist";
         color = 0x00FFFFFF;
     }

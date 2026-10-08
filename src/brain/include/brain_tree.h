@@ -667,7 +667,6 @@ public:
     void onHalted() override;
 private:
     Brain *brain;
-    bool _firstWaypointActive = false;
 };
 
 // 开球阶段非当前半区进攻组的待命站位。
