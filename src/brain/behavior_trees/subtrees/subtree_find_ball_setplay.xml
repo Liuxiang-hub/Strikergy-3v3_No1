@@ -2,22 +2,19 @@
   <BehaviorTree ID="SetPlayFindBall">
     <Sequence name="set_play_find_ball">
       <GoBackInField />
-      <CamFastScan />
 
-      <!-- 快速头扫后身体只旋转一周；发现本机或队友球位立即退出。 -->
+      <!-- 同一持续节点：前约 2.1 秒仅扫头，随后扫头并旋转身体一周。 -->
       <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
-        <CamFindBall />
-        <TurnOnSpot rad="6.283185307" />
+        <CamFastScan rad="6.283185307" vyaw_limit="0.8" />
       </ReactiveSequence>
 
-      <!-- 仍无球时，1号去 (-3,+3)，2号去 (-3,-3)，
-           导航过程中发现球或收到队友球位会立即退出，不走常规搜索点路线。 -->
+      <!-- 定位球专用搜索点：1号 (-3,+3)，2号 (-3,-3)。 -->
       <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
         <CamFindBall />
         <MoveToBallSearchPosition mode="set_play" />
       </ReactiveSequence>
 
-      <!-- 到达专用点后继续头部扫描和原地旋转。 -->
+      <!-- 到达专用点后继续扫头并原地旋转。 -->
       <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
         <CamFindBall />
         <RobotFindBall vyaw_limit="0.8" />

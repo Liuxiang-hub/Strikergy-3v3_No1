@@ -181,17 +181,29 @@ class CamFastScan : public StatefulActionNode
 {
 public:
     CamFastScan(const string &name, const NodeConfig &config, Brain *_brain) : StatefulActionNode(name, config), brain(_brain) {}
-    static PortsList providedPorts() { return { InputPort<double>("msecs_interval", 300, "") }; }
+    static PortsList providedPorts() {
+        return {
+            InputPort<double>("msecs_interval", 300, ""),
+            InputPort<double>("rad", 6.283185307, ""),
+            InputPort<double>("vyaw_limit", 0.8, "")
+        };
+    }
     NodeStatus onStart() override;
     NodeStatus onRunning() override;
-    void onHalted() override {};
+    void onHalted() override;
 private:
     double _cmdSequence[7][2] = {
         {0.2, 1.1}, {0.2, 0.0}, {0.2, -1.1},
         {0.9, -1.1}, {0.9, 0.0}, {0.9, 1.1}, {0.2, 0.0},
     };
     rclcpp::Time _timeLastCmd;
+    rclcpp::Time _timeTurnStart;
     int _cmdIndex = 0;
+    bool _bodyTurning = false;
+    double _lastAngle = 0.0;
+    double _cumAngle = 0.0;
+    double _targetAngle = 6.283185307;
+    double _turnVelocity = 0.8;
     Brain *brain;
 };
 
@@ -656,8 +668,6 @@ public:
 private:
     Brain *brain;
     bool _firstWaypointActive = false;
-    int _ballAvoidPhase = 0; // 0=direct, 1=side waypoint, 2=final target
-    Pose2D _ballAvoidWaypoint{};
 };
 
 // 开球阶段非当前半区进攻组的待命站位。

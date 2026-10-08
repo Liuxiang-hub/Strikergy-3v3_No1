@@ -1523,10 +1523,8 @@ NodeStatus GoToGoalBlockingPosition::tick() {
 NodeStatus Assist::onStart()
 {
     // 每次重新进入 Assist 都按当前球位重新规划，不能沿用上一次角色周期
-    // 留下的第一绕行点或绕球 waypoint。
+    // 留下的第一接应过渡点。
     _firstWaypointActive = false;
-    _ballAvoidPhase = 0;
-    _ballAvoidWaypoint = {};
     return onRunning();
 }
 
@@ -1691,56 +1689,12 @@ NodeStatus Assist::onRunning() {
     log(format("assist target=(%.2f, %.2f) face_ball=(%.2f, %.2f)",
         targetPose.x, targetPose.y, ballPos.x, ballPos.y));
 
-    // If the direct receiving path cuts through the ball, first drive to a
-    // locked side waypoint, then continue to the final assist position.
-    constexpr double ASSIST_BALL_INFLATED_RADIUS = 0.9;
-    constexpr double ASSIST_BALL_WAYPOINT_EXTRA = 0.15;
-    const auto pathHitsBall = [&](const Pose2D &from, const Pose2D &to) {
-        const double dx = to.x - from.x;
-        const double dy = to.y - from.y;
-        const double len2 = dx * dx + dy * dy;
-        if (len2 < 1e-6) return false;
-        const double ux = ballPos.x - from.x;
-        const double uy = ballPos.y - from.y;
-        const double projection = (ux * dx + uy * dy) / len2;
-        if (projection <= 0.0 || projection >= 1.0) return false;
-        const double cross = dx * uy - dy * ux;
-        return std::fabs(cross) / std::sqrt(len2) < ASSIST_BALL_INFLATED_RADIUS;
-    };
-    if (_ballAvoidPhase == 0 && pathHitsBall(robotPose, targetPose)) {
-        const double dx = targetPose.x - robotPose.x;
-        const double dy = targetPose.y - robotPose.y;
-        const double length = std::max(1e-3, std::hypot(dx, dy));
-        const double nx = -dy / length;
-        const double ny = dx / length;
-        const double cross = dx * (ballPos.y - robotPose.y) -
-            dy * (ballPos.x - robotPose.x);
-        const double side = cross >= 0.0 ? -1.0 : 1.0;
-        const double clearance = ASSIST_BALL_INFLATED_RADIUS + ASSIST_BALL_WAYPOINT_EXTRA;
-        _ballAvoidWaypoint.x = ballPos.x + side * nx * clearance;
-        _ballAvoidWaypoint.y = ballPos.y + side * ny * clearance;
-        _ballAvoidWaypoint.theta = std::atan2(
-            targetPose.y - _ballAvoidWaypoint.y,
-            targetPose.x - _ballAvoidWaypoint.x);
-        _ballAvoidPhase = 1;
-        log(format("ball avoidance: waypoint=(%.2f, %.2f)",
-            _ballAvoidWaypoint.x, _ballAvoidWaypoint.y));
-    }
     Pose2D navigationPose = targetPose;
-    if (_ballAvoidPhase == 1) {
-        navigationPose = _ballAvoidWaypoint;
-        if (norm(robotPose.x - _ballAvoidWaypoint.x,
-                 robotPose.y - _ballAvoidWaypoint.y) < 0.35) {
-            _ballAvoidPhase = 2;
-            navigationPose = targetPose;
-            log("ball avoidance: reached side waypoint, continue to assist target");
-        }
-    } else if (_ballAvoidPhase == 2 &&
-               norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) < distTolerance) {
-        _ballAvoidPhase = 0;
-    }
 
     double dist = norm(navigationPose.x - robotPose.x, navigationPose.y - robotPose.y);
+    double vxLimit, vyLimit;
+    getInput("vx_limit", vxLimit);
+    getInput("vy_limit", vyLimit);
     if ( // 认为到达了目标位置
         dist < distTolerance
         && fabs(toPInPI(navigationPose.theta - robotPose.theta)) < thetaTolerance
@@ -1749,6 +1703,24 @@ NodeStatus Assist::onRunning() {
         return NodeStatus::SUCCESS;
     }
 
+    // 远距离阶段交给场地导航器：先让身体朝向行进方向，再以前进步态赶往
+    // 接应点，避免全程面向球导致长距离侧身并步。
+    constexpr double ASSIST_FACE_BALL_DISTANCE_M = 0.7;
+    if (dist > ASSIST_FACE_BALL_DISTANCE_M) {
+        Pose2D travelPose = navigationPose;
+        travelPose.theta = atan2(
+            navigationPose.y - robotPose.y,
+            navigationPose.x - robotPose.x);
+        brain->client->moveToPoseOnField3(
+            travelPose.x, travelPose.y, travelPose.theta,
+            ASSIST_FACE_BALL_DISTANCE_M, 0.35,
+            vxLimit, vyLimit, 1.5,
+            0.20, 0.20, thetaTolerance,
+            true);
+        return NodeStatus::RUNNING;
+    }
+
+    // 进入目标附近 0.7 m 后再做精细平移，并将身体朝向球。
     double vx, vy, vtheta;
     auto targetPose_r = brain->data->field2robot(navigationPose);
     double targetDir = atan2(targetPose_r.y, targetPose_r.x);
@@ -1769,54 +1741,9 @@ NodeStatus Assist::onRunning() {
         vy = targetPose_r.y;
         vtheta = toPInPI(navigationPose.theta - robotPose.theta);
     }
-
-
-    double vxLimit, vyLimit;
-    getInput("vx_limit", vxLimit);
-    getInput("vy_limit", vyLimit);
     vx = cap(vx, vxLimit, -0.25);     // 进一步限速, 不允许后退速度过快.
     vy = cap(vy, vyLimit, -vyLimit);     // 进一步限速
      
-
-    // Keep the receiving path clear of the ball and live teammates.
-    const double pathDx = navigationPose.x - robotPose.x;
-    const double pathDy = navigationPose.y - robotPose.y;
-    const double pathLength2 = pathDx * pathDx + pathDy * pathDy;
-    double fieldVx = cos(robotPose.theta) * vx - sin(robotPose.theta) * vy;
-    double fieldVy = sin(robotPose.theta) * vx + cos(robotPose.theta) * vy;
-    auto steerAroundFieldPoint = [&](double pointX, double pointY, double clearance,
-                                     double lateralSpeed) {
-        if (pathLength2 < 1e-6) return;
-        const double relX = pointX - robotPose.x;
-        const double relY = pointY - robotPose.y;
-        const double projection = (relX * pathDx + relY * pathDy) / pathLength2;
-        if (projection <= 0.0 || projection >= 1.0) return;
-        const double cross = pathDx * relY - pathDy * relX;
-        const double distance = fabs(cross) / sqrt(pathLength2);
-        if (distance >= clearance) return;
-        const double sign = cross >= 0.0 ? -1.0 : 1.0;
-        const double invLength = 1.0 / sqrt(pathLength2);
-        fieldVx += sign * (-pathDy * invLength) * lateralSpeed;
-        fieldVy += sign * ( pathDx * invLength) * lateralSpeed;
-    };
-    // Treat the football as a circular obstacle with a 0.5 m radius.
-    // The robot's own footprint is handled by the motion layer separately;
-    // this value is the explicit ball-clearance radius for Assist routing.
-    constexpr double ASSIST_BALL_RADIUS_M = 0.5;
-    constexpr double ASSIST_BALL_LATERAL_AVOID_SPEED = 0.6;
-    constexpr double ASSIST_TEAMMATE_LATERAL_AVOID_SPEED = 0.9;
-    steerAroundFieldPoint(ballPos.x, ballPos.y, ASSIST_BALL_RADIUS_M,
-                          ASSIST_BALL_LATERAL_AVOID_SPEED);
-    for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
-        if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
-        const auto &tmPose = brain->data->tmStatus[i].robotPoseToField;
-        steerAroundFieldPoint(tmPose.x, tmPose.y, 0.8,
-                              ASSIST_TEAMMATE_LATERAL_AVOID_SPEED);
-    }
-    vx = cos(robotPose.theta) * fieldVx + sin(robotPose.theta) * fieldVy;
-    vy = -sin(robotPose.theta) * fieldVx + cos(robotPose.theta) * fieldVy;
-    vx = cap(vx, vxLimit, -0.25);
-    vy = cap(vy, vyLimit, -vyLimit);
 
     brain->client->setVelocity(vx, vy, vtheta, false, false, false);
     return NodeStatus::RUNNING;
@@ -1827,8 +1754,6 @@ void Assist::onHalted()
     // 决策从 assist 切到 find/adjust/attacker 时，立即清除本轮路线状态，
     // 并停止上一帧 Assist 留下的速度指令。
     _firstWaypointActive = false;
-    _ballAvoidPhase = 0;
-    _ballAvoidWaypoint = {};
     brain->client->setVelocity(0.0, 0.0, 0.0);
 }
 
@@ -2090,6 +2015,22 @@ NodeStatus CalcKickDir::tick()
         bPos.x >= 6.0;
     if (ballInsideInsetGoalposts && !setPlayAttackActive) {
         nextKickDir = 0.0;
+    }
+
+    // NORMAL 正常拼抢内的最高优先级：球位于以场地中心为圆心、半径为
+    // “中圈半径 + 2 m”的区域内时，一律沿场地 +x 方向踢。开球和各类
+    // 定位球不使用此特例，继续保持各自的瞄准方向。
+    const bool normalContest =
+        brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        (brain->data->realGameSubState == "NONE" ||
+         brain->data->realGameSubState == "OVERTIME");
+    const double centerCircleForwardAimRadius = fd.circleRadius + 2.0;
+    const bool ballInsideExpandedCenterCircle =
+        std::hypot(bPos.x, bPos.y) <= centerCircleForwardAimRadius;
+    if (normalContest && ballInsideExpandedCenterCircle) {
+        nextKickDir = 0.0;
+        color = 0x00FFFFFF;
     }
 
     brain->data->kickType = nextKickType;
@@ -3310,6 +3251,11 @@ void RobotFindBall::onHalted()
 NodeStatus CamFastScan::onStart()
 {
     _cmdIndex = 0;
+    _bodyTurning = false;
+    _cumAngle = 0.0;
+    _targetAngle = getInput<double>("rad").value();
+    const double vyawLimit = fabs(getInput<double>("vyaw_limit").value());
+    _turnVelocity = (_targetAngle >= 0.0 ? 1.0 : -1.0) * vyawLimit;
     _timeLastCmd = brain->get_clock()->now();
     brain->client->moveHead(_cmdSequence[_cmdIndex][0], _cmdSequence[_cmdIndex][1]);
     return NodeStatus::RUNNING;
@@ -3318,16 +3264,58 @@ NodeStatus CamFastScan::onStart()
 NodeStatus CamFastScan::onRunning()
 {
     double interval = getInput<double>("msecs_interval").value();
-    if (brain->msecsSince(_timeLastCmd) < interval) return NodeStatus::RUNNING;
+    const auto now = brain->get_clock()->now();
 
-    // else 
-    if (_cmdIndex >= 6) return NodeStatus::SUCCESS;
+    if (!_bodyTurning) {
+        if (brain->msecsSince(_timeLastCmd) < interval) return NodeStatus::RUNNING;
 
-    // else
-    _cmdIndex++;
-    _timeLastCmd = brain->get_clock()->now();
-    brain->client->moveHead(_cmdSequence[_cmdIndex][0], _cmdSequence[_cmdIndex][1]);
+        if (_cmdIndex < 6) {
+            _cmdIndex++;
+            _timeLastCmd = now;
+            brain->client->moveHead(_cmdSequence[_cmdIndex][0], _cmdSequence[_cmdIndex][1]);
+            return NodeStatus::RUNNING;
+        }
+
+        // The initial seven head poses take about 2.1 s. Keep this same BT node
+        // RUNNING and transition directly into simultaneous head/body scanning.
+        _bodyTurning = true;
+        _lastAngle = brain->data->robotPoseToOdom.theta;
+        _cumAngle = 0.0;
+        _timeTurnStart = now;
+        _timeLastCmd = now;
+        brain->client->setVelocity(0, 0, _turnVelocity);
+        return NodeStatus::RUNNING;
+    }
+
+    const double curAngle = brain->data->robotPoseToOdom.theta;
+    const double deltaAngle = toPInPI(curAngle - _lastAngle);
+    _lastAngle = curAngle;
+    _cumAngle += deltaAngle;
+
+    // At 0.8 rad/s a full turn takes about 7.9 s. The timeout only protects
+    // against stale odometry; normally accumulated odometry ends this phase.
+    const double turnTimeout = fabs(_targetAngle) / std::max(fabs(_turnVelocity), 0.1) * 1000.0 + 3000.0;
+    if (fabs(_cumAngle) >= fabs(_targetAngle) - 0.1
+        || brain->msecsSince(_timeTurnStart) > turnTimeout) {
+        brain->client->setVelocity(0, 0, 0);
+        return NodeStatus::SUCCESS;
+    }
+
+    // Continue cycling all head poses while the body turns.
+    if (brain->msecsSince(_timeLastCmd) >= interval) {
+        _cmdIndex = (_cmdIndex + 1) % 7;
+        _timeLastCmd = now;
+        brain->client->moveHead(_cmdSequence[_cmdIndex][0], _cmdSequence[_cmdIndex][1]);
+    }
+    brain->client->setVelocity(0, 0, _turnVelocity);
     return NodeStatus::RUNNING;
+}
+
+void CamFastScan::onHalted()
+{
+    if (_bodyTurning) brain->client->setVelocity(0, 0, 0);
+    _bodyTurning = false;
+    _cumAngle = 0.0;
 }
 
 NodeStatus TurnOnSpot::onStart()
