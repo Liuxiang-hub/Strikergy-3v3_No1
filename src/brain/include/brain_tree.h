@@ -638,10 +638,11 @@ private:
     Brain *brain;
 };
 
-class Assist : public SyncActionNode
+class Assist : public StatefulActionNode
 {
 public:
-    Assist(const std::string &name, const NodeConfig &config, Brain *_brain) : SyncActionNode(name, config), brain(_brain) {}
+    Assist(const std::string &name, const NodeConfig &config, Brain *_brain)
+        : StatefulActionNode(name, config), brain(_brain) {}
     static BT::PortsList providedPorts() {
         return {
             InputPort<double>("dist_tolerance", 0.5, ""), InputPort<double>("theta_tolerance", 0.1, ""),
@@ -649,9 +650,14 @@ public:
             InputPort<double>("dist_to_goalline", 1.0, ""),
         };
     }
-    BT::NodeStatus tick() override;
+    BT::NodeStatus onStart() override;
+    BT::NodeStatus onRunning() override;
+    void onHalted() override;
 private:
     Brain *brain;
+    bool _firstWaypointActive = false;
+    int _ballAvoidPhase = 0; // 0=direct, 1=side waypoint, 2=final target
+    Pose2D _ballAvoidWaypoint{};
 };
 
 // 开球阶段非当前半区进攻组的待命站位。

@@ -917,7 +917,7 @@ void MoveToBallSearchPosition::onHalted()
 
 // 我方角球/门球开球时，非开球者（rank >= 1）的站位：
 // 默认原地不动、面向球；只在挡住 "球 -> kickDir" 的开球通道时才做局部横向让位。
-// 由 Assist::tick（v20 协议下我方开球时的实际生效路径）和 GoToFreekickPosition（兼容旧协议）共用。
+// 由 Assist::onRunning（v20 协议下我方开球时的实际生效路径）和 GoToFreekickPosition（兼容旧协议）共用。
 static Pose2D calcSetPlayStandPose(Brain *brain, const Pose2D &robotPose, const Point &ballPos)
 {
     double corridorHalfWidth, corridorForwardRange, sideMargin;
@@ -1520,7 +1520,17 @@ NodeStatus GoToGoalBlockingPosition::tick() {
     return NodeStatus::SUCCESS;
 }
 
-NodeStatus Assist::tick() {
+NodeStatus Assist::onStart()
+{
+    // 每次重新进入 Assist 都按当前球位重新规划，不能沿用上一次角色周期
+    // 留下的第一绕行点或绕球 waypoint。
+    _firstWaypointActive = false;
+    _ballAvoidPhase = 0;
+    _ballAvoidWaypoint = {};
+    return onRunning();
+}
+
+NodeStatus Assist::onRunning() {
     auto log = [=](string msg) {
         brain->log->setTimeNow();
         brain->log->log("debug/Assist", rerun::TextLog(msg));
@@ -1644,13 +1654,12 @@ NodeStatus Assist::tick() {
     // NORMAL Assist 每帧根据球与自身的前后关系重新计算接应点。
     // 对方球门位于 +x：球的 x 大于自身时，球比自身更靠近对方球门。
     const bool ballCloserToOpponentGoal = ballPos.x > robotPose.x;
-    static bool firstWaypointActive = false;
-    if (!firstWaypointActive && !ballCloserToOpponentGoal) {
-        firstWaypointActive = true;
+    if (!_firstWaypointActive && !ballCloserToOpponentGoal) {
+        _firstWaypointActive = true;
     }
 
-    bool aimingForFirstWaypoint = firstWaypointActive;
-    if (firstWaypointActive) {
+    bool aimingForFirstWaypoint = _firstWaypointActive;
+    if (_firstWaypointActive) {
         // 一旦球落到自身后方，必须先完成这个绕行点，不能在 x 刚越过球时
         // 提前切换到“球后 2 m”，否则会斜穿球的附近。
         targetPose.x = ballPos.x - 1.0;
@@ -1670,7 +1679,7 @@ NodeStatus Assist::tick() {
         -fd.width / 2.0 + 0.7);
     if (aimingForFirstWaypoint &&
         norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) <= distTolerance) {
-        firstWaypointActive = false;
+        _firstWaypointActive = false;
         targetPose.x = cap(ballPos.x - 2.0, oppGoalX - 0.5,
             ownGoalX + distToGoalline);
         targetPose.y = cap(ballPos.y, fd.width / 2.0 - 0.7,
@@ -1684,8 +1693,6 @@ NodeStatus Assist::tick() {
 
     // If the direct receiving path cuts through the ball, first drive to a
     // locked side waypoint, then continue to the final assist position.
-    static int ballAvoidPhase = 0; // 0=direct, 1=side waypoint, 2=final target
-    static Pose2D ballAvoidWaypoint{};
     constexpr double ASSIST_BALL_INFLATED_RADIUS = 0.9;
     constexpr double ASSIST_BALL_WAYPOINT_EXTRA = 0.15;
     const auto pathHitsBall = [&](const Pose2D &from, const Pose2D &to) {
@@ -1700,7 +1707,7 @@ NodeStatus Assist::tick() {
         const double cross = dx * uy - dy * ux;
         return std::fabs(cross) / std::sqrt(len2) < ASSIST_BALL_INFLATED_RADIUS;
     };
-    if (ballAvoidPhase == 0 && pathHitsBall(robotPose, targetPose)) {
+    if (_ballAvoidPhase == 0 && pathHitsBall(robotPose, targetPose)) {
         const double dx = targetPose.x - robotPose.x;
         const double dy = targetPose.y - robotPose.y;
         const double length = std::max(1e-3, std::hypot(dx, dy));
@@ -1710,27 +1717,27 @@ NodeStatus Assist::tick() {
             dy * (ballPos.x - robotPose.x);
         const double side = cross >= 0.0 ? -1.0 : 1.0;
         const double clearance = ASSIST_BALL_INFLATED_RADIUS + ASSIST_BALL_WAYPOINT_EXTRA;
-        ballAvoidWaypoint.x = ballPos.x + side * nx * clearance;
-        ballAvoidWaypoint.y = ballPos.y + side * ny * clearance;
-        ballAvoidWaypoint.theta = std::atan2(
-            targetPose.y - ballAvoidWaypoint.y,
-            targetPose.x - ballAvoidWaypoint.x);
-        ballAvoidPhase = 1;
+        _ballAvoidWaypoint.x = ballPos.x + side * nx * clearance;
+        _ballAvoidWaypoint.y = ballPos.y + side * ny * clearance;
+        _ballAvoidWaypoint.theta = std::atan2(
+            targetPose.y - _ballAvoidWaypoint.y,
+            targetPose.x - _ballAvoidWaypoint.x);
+        _ballAvoidPhase = 1;
         log(format("ball avoidance: waypoint=(%.2f, %.2f)",
-            ballAvoidWaypoint.x, ballAvoidWaypoint.y));
+            _ballAvoidWaypoint.x, _ballAvoidWaypoint.y));
     }
     Pose2D navigationPose = targetPose;
-    if (ballAvoidPhase == 1) {
-        navigationPose = ballAvoidWaypoint;
-        if (norm(robotPose.x - ballAvoidWaypoint.x,
-                 robotPose.y - ballAvoidWaypoint.y) < 0.35) {
-            ballAvoidPhase = 2;
+    if (_ballAvoidPhase == 1) {
+        navigationPose = _ballAvoidWaypoint;
+        if (norm(robotPose.x - _ballAvoidWaypoint.x,
+                 robotPose.y - _ballAvoidWaypoint.y) < 0.35) {
+            _ballAvoidPhase = 2;
             navigationPose = targetPose;
             log("ball avoidance: reached side waypoint, continue to assist target");
         }
-    } else if (ballAvoidPhase == 2 &&
+    } else if (_ballAvoidPhase == 2 &&
                norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) < distTolerance) {
-        ballAvoidPhase = 0;
+        _ballAvoidPhase = 0;
     }
 
     double dist = norm(navigationPose.x - robotPose.x, navigationPose.y - robotPose.y);
@@ -1812,7 +1819,17 @@ NodeStatus Assist::tick() {
     vy = cap(vy, vyLimit, -vyLimit);
 
     brain->client->setVelocity(vx, vy, vtheta, false, false, false);
-    return NodeStatus::SUCCESS;
+    return NodeStatus::RUNNING;
+}
+
+void Assist::onHalted()
+{
+    // 决策从 assist 切到 find/adjust/attacker 时，立即清除本轮路线状态，
+    // 并停止上一帧 Assist 留下的速度指令。
+    _firstWaypointActive = false;
+    _ballAvoidPhase = 0;
+    _ballAvoidWaypoint = {};
+    brain->client->setVelocity(0.0, 0.0, 0.0);
 }
 
 NodeStatus KickoffStand::tick()
