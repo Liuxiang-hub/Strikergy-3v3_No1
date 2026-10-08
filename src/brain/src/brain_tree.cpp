@@ -854,26 +854,12 @@ NodeStatus MoveToBallSearchPosition::onStart()
     string mode = "normal";
     getInput("mode", mode);
     if (mode == "set_play" || mode == "goal_kick") {
-        const bool cornerKick = mode == "corner_kick" ||
-            brain->data->realGameSubState == "CORNER_KICK";
-        if (cornerKick) {
-            // 此时本机和队友都还不知道球在哪，不能用球位决定搜索点。
-            // 两台机器人分头覆盖对方球门侧的两个角点，坐标向场内缩 0.5 m。
-            const double inset = 0.5;
-            const double cornerSign = brain->config->playerId == 2 ? -1.0 : 1.0;
-            _targetPose = {
-                fd.length / 2.0 - inset,
-                cornerSign * (fd.width / 2.0 - inset),
-                0.0};
-            return NodeStatus::RUNNING;
-        }
-        // 我方门球找球点：己方禁区前沿的 y 正、负两侧。
-        // 1号去 y 正点，2号去 y 负点。
-        const double ownPenaltyFrontX = -fd.length / 2.0 + fd.penaltyAreaLength;
-        const double searchY = fd.penaltyAreaWidth / 2.0;
+        // 定位球首轮原地搜索仍未找到球时，两台机器人分区搜索：
+        // 1号去 (-3, +3)，2号去 (-3, -3)。到点后行为树会继续
+        // 执行 CamFindBall + RobotFindBall，原地转身并持续转头找球。
         _targetPose = {
-            ownPenaltyFrontX,
-            brain->config->playerId == 2 ? -searchY : searchY,
+            -3.0,
+            brain->config->playerId == 2 ? -3.0 : 3.0,
             0.0};
         return NodeStatus::RUNNING;
     }
@@ -1655,46 +1641,46 @@ NodeStatus Assist::tick() {
         targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7, -fd.width / 2.0 + 0.7);
     }
 
-    // Unified assist position: continue the line from the opponent goal
-    // center through the ball by 2 m toward our own goal. Face the opponent
-    // goal center.
-    const double assistDx = ballPos.x - oppGoalX;
-    const double assistDy = ballPos.y;
-    const double assistLineLength = std::hypot(assistDx, assistDy);
-    if (assistLineLength > 1e-3) {
-        targetPose.x = ballPos.x + 2.0 * assistDx / assistLineLength;
-        targetPose.y = ballPos.y + 2.0 * assistDy / assistLineLength;
+    // NORMAL Assist 每帧根据球与自身的前后关系重新计算接应点。
+    // 对方球门位于 +x：球的 x 大于自身时，球比自身更靠近对方球门。
+    const bool ballCloserToOpponentGoal = ballPos.x > robotPose.x;
+    static bool firstWaypointActive = false;
+    if (!firstWaypointActive && !ballCloserToOpponentGoal) {
+        firstWaypointActive = true;
+    }
+
+    bool aimingForFirstWaypoint = firstWaypointActive;
+    if (firstWaypointActive) {
+        // 一旦球落到自身后方，必须先完成这个绕行点，不能在 x 刚越过球时
+        // 提前切换到“球后 2 m”，否则会斜穿球的附近。
+        targetPose.x = ballPos.x - 1.0;
+        targetPose.y = ballPos.y - 1.5;
+        log(format("ball behind: first waypoint target=(%.2f, %.2f)",
+            targetPose.x, targetPose.y));
     } else {
+        // 球在身前：保持在球的正后方 2 m。
         targetPose.x = ballPos.x - 2.0;
         targetPose.y = ballPos.y;
+        log(format("ball ahead: hold 2m behind ball target=(%.2f, %.2f)",
+            targetPose.x, targetPose.y));
     }
-    targetPose.theta = atan2(-ballPos.y, oppGoalX - ballPos.x);
-    targetPose.x = cap(targetPose.x, oppGoalX - fd.penaltyAreaLength - 0.2,
+    targetPose.x = cap(targetPose.x, oppGoalX - 0.5,
         ownGoalX + distToGoalline);
     targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7,
         -fd.width / 2.0 + 0.7);
-
-    // Keep the endpoint clear of live teammates.
-    const int assistSelfIdx = brain->config->playerId - 1;
-    for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
-        if (i == assistSelfIdx || !brain->data->tmStatus[i].isAlive) continue;
-        const auto &tmPose = brain->data->tmStatus[i].robotPoseToField;
-        const double awayX = targetPose.x - tmPose.x;
-        const double awayY = targetPose.y - tmPose.y;
-        const double awayDist = std::hypot(awayX, awayY);
-        if (awayDist < 0.8) {
-            const double scale = (0.8 - awayDist) / std::max(awayDist, 1e-3);
-            targetPose.x += awayX * scale;
-            targetPose.y += awayY * scale;
-        }
+    if (aimingForFirstWaypoint &&
+        norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y) <= distTolerance) {
+        firstWaypointActive = false;
+        targetPose.x = cap(ballPos.x - 2.0, oppGoalX - 0.5,
+            ownGoalX + distToGoalline);
+        targetPose.y = cap(ballPos.y, fd.width / 2.0 - 0.7,
+            -fd.width / 2.0 + 0.7);
+        log("first waypoint reached: continue to 2m behind ball");
     }
-    targetPose.x = cap(targetPose.x, oppGoalX - fd.penaltyAreaLength - 0.2,
-        ownGoalX + distToGoalline);
-    targetPose.y = cap(targetPose.y, fd.width / 2.0 - 0.7,
-        -fd.width / 2.0 + 0.7);
-    targetPose.theta = atan2(-ballPos.y, oppGoalX - ballPos.x);
-    log(format("line assist target=(%.2f, %.2f) face_goal=(%.2f, %.2f)",
-        targetPose.x, targetPose.y, oppGoalX, 0.0));
+    targetPose.theta = atan2(
+        ballPos.y - targetPose.y, ballPos.x - targetPose.x);
+    log(format("assist target=(%.2f, %.2f) face_ball=(%.2f, %.2f)",
+        targetPose.x, targetPose.y, ballPos.x, ballPos.y));
 
     // If the direct receiving path cuts through the ball, first drive to a
     // locked side waypoint, then continue to the final assist position.
@@ -1774,7 +1760,7 @@ NodeStatus Assist::tick() {
     } else {
         vx = targetPose_r.x;
         vy = targetPose_r.y;
-        vtheta = brain->data->ball.yawToRobot * 2.0; // 后面的乘数越大, 转身越快
+        vtheta = toPInPI(navigationPose.theta - robotPose.theta);
     }
 
 
@@ -2042,9 +2028,10 @@ NodeStatus CalcKickDir::tick()
         color = 0xFF00FFFF;
     }
     else if (brain->data->isKickingOff) {
-        // 我方中圈开球固定向场地 y 负方向横传。
+        // 我方中圈开球瞄准对方半场负 y 侧角点；CAA 场地为 (7, -4.5)。
         nextKickType = "visual_kick";
-        nextKickDir = -M_PI / 2.0;
+        nextKickDir = kick_geometry::directionToTarget(
+            bPos.x, bPos.y, fd.length / 2.0, -fd.width / 2.0, shootDir);
         color = 0xFF00FFFF;
     }
     else if (

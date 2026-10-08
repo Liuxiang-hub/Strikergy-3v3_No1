@@ -10,7 +10,7 @@
         <TurnOnSpot rad="6.283185307" />
       </ReactiveSequence>
 
-      <!-- 仍无球时，角球/门球统一去己方禁区前沿的 y 正/负搜索点，
+      <!-- 仍无球时，1号去 (-3,+3)，2号去 (-3,-3)，
            导航过程中发现球或收到队友球位会立即退出，不走常规搜索点路线。 -->
       <ReactiveSequence _while="!(ball_location_known || tm_ball_pos_reliable)">
         <CamFindBall />

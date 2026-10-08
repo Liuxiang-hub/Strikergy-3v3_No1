@@ -73,6 +73,38 @@ double pitchToGroundObject(double robotHeight, double horizontalRange)
     // for a ground object directly below the robot (horizontalRange == 0).
     return std::atan2(robotHeight, horizontalRange);
 }
+
+// 与 CalcKickDir 的 NORMAL 五目标点选择保持一致：针对候选机器人，
+// 选择身体转向代价最小的球门目标，并返回“球 -> 最终目标”的方向。
+double normalContestKickDirection(
+    const FieldDimensions &fd, const Pose2D &robotPose, const Point &ballPos)
+{
+    const double goalLineX = fd.length / 2.0;
+    const double halfGoalWidth = fd.goalWidth / 2.0;
+    const double aimOffset = std::min(1.0, halfGoalWidth);
+    const double halfAimOffset = std::min(0.5, halfGoalWidth);
+    const double candidateGoalY[5] = {
+        -aimOffset, -halfAimOffset, 0.0, halfAimOffset, aimOffset};
+
+    double bestDirection = 0.0;
+    double minTurnCost = std::numeric_limits<double>::infinity();
+    for (const double targetY : candidateGoalY) {
+        const double candidateDirection = kick_geometry::directionToTarget(
+            ballPos.x, ballPos.y, goalLineX, targetY, 0.0);
+        const double turnCost = kick_geometry::angleDistance(
+            candidateDirection, robotPose.theta);
+        if (turnCost < minTurnCost) {
+            minTurnCost = turnCost;
+            bestDirection = candidateDirection;
+        }
+    }
+
+    constexpr double kGoalpostInset = 0.5;
+    const bool ballInsideInsetGoalposts =
+        std::fabs(ballPos.y) <= std::max(0.0, halfGoalWidth - kGoalpostInset) &&
+        ballPos.x >= 6.0;
+    return ballInsideInsetGoalposts ? 0.0 : bestDirection;
+}
 } // namespace
 
 Brain::Brain() : rclcpp::Node("brain_node")
@@ -564,8 +596,8 @@ void Brain::pubKickMsg() {
     double goal_x = ownSetPlayPass ? 0.0 : config->fieldDimensions.length / 2;
     double goal_y = 0.0;
     if (ownKickoffPass) {
-        // 我方中圈开球固定沿场地 y 负方向，目标点落在同 x 的负侧边线。
-        goal_x = ballField.x;
+        // 我方中圈开球瞄准对方半场负 y 侧角点。
+        goal_x = config->fieldDimensions.length / 2.0;
         goal_y = -config->fieldDimensions.width / 2.0;
     }
     const double clearanceDir = kick_geometry::directionToOpponentGoal(
@@ -1012,15 +1044,18 @@ void Brain::handleCooperation() {
         gameStateForOwner == "PLAY" &&
         !tree->getEntry<bool>("gc_kickoff_active") &&
         (realSubStateForOwner == "NONE" || realSubStateForOwner == "OVERTIME");
-    const double opponentGoalX = config->fieldDimensions.length / 2.0;
     auto makeCandidate = [&](int id, const Pose2D &pose, const Point &ballPos,
                              bool seesBall, bool fallen, double fallbackCost) {
         BallOwnerCandidate candidate;
         candidate.id = id;
         candidate.rawDistance = norm(ballPos.x - pose.x, ballPos.y - pose.y);
         candidate.fallen = fallen;
-        candidate.facingScore = std::abs(toPInPI(
-            std::atan2(-pose.y, opponentGoalX - pose.x) - pose.theta)) / M_PI;
+        const double finalKickDirection = normalContestKickDirection(
+            config->fieldDimensions, pose, ballPos);
+        const double robotToBallDirection = kick_geometry::directionToTarget(
+            pose.x, pose.y, ballPos.x, ballPos.y, pose.theta);
+        candidate.facingScore = kick_geometry::angleDistance(
+            finalKickDirection, robotToBallDirection) / M_PI;
         candidate.cost = fallbackCost;
         if (normalOwnerPhase && seesBall) {
             const double effectiveDistance = candidate.rawDistance + (fallen ? 11.0 : 0.0);
@@ -1074,7 +1109,8 @@ void Brain::handleCooperation() {
     int ownerId = bestOwner.id;
     if (normalOwnerPhase) {
         constexpr double ATTACKER_KEEP_DIST_MARGIN_M = 0.3;
-        constexpr double FACING_FORCE_SWITCH_MARGIN = 0.4;
+        constexpr double FACING_FORCE_SWITCH_MARGIN = 0.3;
+        constexpr double FACING_FORCE_SWITCH_MAX_EXTRA_DIST_M = 1.5;
         const BallOwnerCandidate *previous = nullptr;
         for (const auto &candidate : ownerCandidates) {
             if (candidate.id == normalAttackerId) {
@@ -1083,9 +1119,22 @@ void Brain::handleCooperation() {
             }
         }
         if (previous != nullptr && bestOwner.id != previous->id) {
+            // 新候选者明显更近时，仍按 0.3 m 的距离迟滞正常换人。
+            const bool distanceDrivenSwitch =
+                bestOwner.rawDistance + ATTACKER_KEEP_DIST_MARGIN_M <
+                previous->rawDistance;
+
+            // 朝向优势触发的强制换人必须同时满足：
+            // 1. 朝向评分至少比旧 attacker 好 0.3；
+            // 2. 距球最多只比旧 attacker 远 1.5 m。
+            const bool facingForceSwitch =
+                bestOwner.facingScore <=
+                    previous->facingScore - FACING_FORCE_SWITCH_MARGIN &&
+                bestOwner.rawDistance <=
+                    previous->rawDistance + FACING_FORCE_SWITCH_MAX_EXTRA_DIST_M;
+
             const bool keepPrevious =
-                previous->rawDistance <= bestOwner.rawDistance + ATTACKER_KEEP_DIST_MARGIN_M &&
-                !(bestOwner.facingScore < previous->facingScore - FACING_FORCE_SWITCH_MARGIN);
+                !distanceDrivenSwitch && !facingForceSwitch;
             if (keepPrevious) ownerId = previous->id;
         }
 
