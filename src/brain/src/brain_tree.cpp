@@ -1960,7 +1960,6 @@ NodeStatus CalcKickDir::tick()
 
     const bool setPlayAttackActive =
         brain->tree->getEntry<bool>("setplay_attack_active");
-    const bool keeperRole = brain->tree->getEntry<string>("player_role") == "keeper";
     string nextKickType = "shoot";
     double nextKickDir = shootDir;
     auto color = 0x00FF00FF;
@@ -2091,6 +2090,7 @@ NodeStatus StrikerDecide::tick() {
         autoVisualKickMaxDirectionError, 0.05, M_PI);
     const bool setPlayAttackActive =
         brain->tree->getEntry<bool>("setplay_attack_active");
+    const bool keeperRole = brain->tree->getEntry<string>("player_role") == "keeper";
 
     const bool kickoffPhase = kickoffTacticalPhase(brain);
     const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
@@ -3178,6 +3178,7 @@ NodeStatus Intercept2::tick()
     const double halfGoalWidth = fd.goalWidth / 2.0;
     const double goalLineX = -fd.length / 2.0;
     const double anchorX = goalLineX + distToGoalLine;
+    const auto &pose = brain->data->robotPoseToField;
     const auto &ball = brain->data->ball.posToField;
     const double ballVx = brain->data->ballEstVelX;
     const double ballVy = brain->data->ballEstVelY;
