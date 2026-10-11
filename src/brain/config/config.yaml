@@ -77,9 +77,9 @@ brain_node:
         ymax: 0.3 
       enable_auto_visual_kick: true
       auto_visual_kick_enable_dist_min: 0.05 # 避免将本体的部分识别为球
-      auto_visual_kick_enable_dist_max: 5.0
-      auto_visual_kick_enable_angle: 1.5
-      auto_visual_kick_max_direction_error: 1.8 # 未对准期望踢球方向时继续 Adjust，不直接进入 VisualKick
+      auto_visual_kick_enable_dist_max: 2.0
+      auto_visual_kick_enable_angle: 0.6
+      auto_visual_kick_max_direction_error: 0.6 # 未对准期望踢球方向时继续 Adjust，不直接进入 VisualKick
       auto_visual_kick:
         real_ball_hold_ms: 1000.0
         current_real_ball_max_age_ms: 650.0

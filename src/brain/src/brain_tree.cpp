@@ -2234,6 +2234,7 @@ NodeStatus StrikerDecide::tick() {
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
+        !powerShootPossible &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
@@ -2261,6 +2262,7 @@ NodeStatus StrikerDecide::tick() {
         !brain->data->lose_ball &&
         !ballInOpponentGoalArea &&
         !powerShootPossible &&
+        visualKickCurrentRealBallFresh(brain) &&
         (setPlayAttackActive || brain->data->tmMyCost < 7.0) &&
         ballRange < autoVisualKickEnableDistMax &&
         ballRange > autoVisualKickEnableDistMin &&
@@ -4955,8 +4957,8 @@ NodeStatus GoToReadyPosition::tick()
             //ty = - fd.goalAreaWidth / 2.0;
         }
     } else if (role == "keeper") {
-        // 与 PLAY 阶段 GoalieIdleHome 的门线前约 1m 深度保持一致。
-        tx = -fd.length / 2.0 + fd.goalAreaLength / 2.0;
+        // 与 PLAY 阶段 GoalieIdleHome 一致，固定站在己方门线前 0.5m。
+        tx = -fd.length / 2.0 + 0.5;
         ty = 0;
         ttheta = 0;
     }
