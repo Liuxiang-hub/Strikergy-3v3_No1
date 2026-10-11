@@ -282,6 +282,7 @@ void BrainTree::initEntry()
     setEntry<bool>("is_lead", true); // true 时代表自己为控球, false 时代表自己不控球, 而是给其它队员打配合.
     setEntry<string>("goalie_mode", "guard_idle");
     setEntry<bool>("goalie_block_kick_active", false);
+    setEntry<bool>("goalie_clearance_latched", false);
     setEntry<bool>("penalty_kick_active", false);
     setEntry<bool>("penalty_kick_defending", false);
     setEntry<double>("penalty_kick_goalie_dist_to_goalline", 0.05);
@@ -1959,6 +1960,7 @@ NodeStatus CalcKickDir::tick()
 
     const bool setPlayAttackActive =
         brain->tree->getEntry<bool>("setplay_attack_active");
+    const bool keeperRole = brain->tree->getEntry<string>("player_role") == "keeper";
     string nextKickType = "shoot";
     double nextKickDir = shootDir;
     auto color = 0x00FF00FF;
@@ -2110,7 +2112,7 @@ NodeStatus StrikerDecide::tick() {
     const bool kickoffHold = kickoffPhase && (!kickoffAttack || ownKickoffPlayer2Hold);
     // NORMAL 只认统一选举结果；开球则直接认锁存的主罚分工，不能再被
     // 进入 PLAY 瞬间的实时成本排名挡在 VisualKick 之外。
-    const bool visualKickOwner = setPlayAttackActive || kickoffAttack ||
+    const bool visualKickOwner = keeperRole || setPlayAttackActive || kickoffAttack ||
         (brain->data->tmImLead &&
          (normalOwnerPhase || brain->data->tmMyCostRank == 0));
 
@@ -2137,7 +2139,7 @@ NodeStatus StrikerDecide::tick() {
         return NodeStatus::SUCCESS;
     }
 
-    if (normalOwnerPhase && !brain->data->tmImLead) {
+    if (normalOwnerPhase && !keeperRole && !brain->data->tmImLead) {
         // 球位有效但未当选：只能接应，不能落入普通 chase/adjust/kick 分支。
         brain->data->tmImInVisualKick = false;
         hasLastDeltaDir = false;
@@ -2245,7 +2247,7 @@ NodeStatus StrikerDecide::tick() {
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
-    if (brain->data->tmImLead && nearBallVisualKick)
+    if ((brain->data->tmImLead || keeperRole) && nearBallVisualKick)
     {
         // 近球也必须先获得队内踢球权，避免多机同时进入 VisualKick。
         newDecision = "auto_visual_kick";
@@ -2397,6 +2399,22 @@ GoalieBallSource getGoalieBallSource(Brain *brain)
     return source;
 }
 
+double goaliePenaltyAreaDistance(const FieldDimensions &fd, const Point &p)
+{
+    const double minX = -fd.length / 2.0;
+    const double maxX = minX + fd.penaltyAreaLength;
+    const double minY = -fd.penaltyAreaWidth / 2.0;
+    const double maxY = fd.penaltyAreaWidth / 2.0;
+    const double dx = std::max({minX - p.x, 0.0, p.x - maxX});
+    const double dy = std::max({minY - p.y, 0.0, p.y - maxY});
+    return std::hypot(dx, dy);
+}
+
+bool goaliePointInPenaltyArea(const FieldDimensions &fd, const Point &p)
+{
+    return goaliePenaltyAreaDistance(fd, p) <= 1e-6;
+}
+
 GoaliePredictTarget getGoaliePredictTarget(Brain *brain, const GoalieBallSource &source)
 {
     GoaliePredictTarget result;
@@ -2460,8 +2478,8 @@ NodeStatus Analyze2::tick()
     const bool cooldownOk = RLVisionKick::getLastExitTime().nanoseconds() == 0 ||
         brain->msecsSince(RLVisionKick::getLastExitTime()) >= cooldownMs;
 
-    const double desiredClearanceDir = kick_geometry::directionToOpponentGoal(
-        source.field.x, source.field.y, brain->config->fieldDimensions.length / 2.0);
+    // 守门员解围方向固定为场地 +x，而不是随球的 y 坐标指向球门中心。
+    const double desiredClearanceDir = 0.0;
     const double sourceDirField = kick_geometry::normalizeAngle(
         brain->data->robotPoseToField.theta + std::atan2(source.robot.y, source.robot.x));
     const double clearanceDirectionError = kick_geometry::angleDistance(
@@ -2474,15 +2492,22 @@ NodeStatus Analyze2::tick()
     const bool ballInOwnPenaltyArea =
         source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength &&
         std::fabs(source.field.y) < fd.penaltyAreaWidth / 2.0;
+    bool clearanceLatched = brain->tree->getEntry<bool>("goalie_clearance_latched");
+    if (ballInOwnPenaltyArea) {
+        clearanceLatched = true;
+    } else if (!source.usable || goaliePenaltyAreaDistance(fd, source.field) > 1.0) {
+        clearanceLatched = false;
+    }
+    brain->tree->setEntry<bool>("goalie_clearance_latched", clearanceLatched);
     // 守门员在我方禁区内负责解围，不应被全队抢球权排名挡住。
     const bool baseReady = source.usable &&
         source.range <= maxRange && cooldownOk &&
         clearanceDirectionReady &&
         ballInOwnPenaltyArea;
-    const double sessionMaxX = -fd.length / 2.0 + fd.penaltyAreaLength + 0.4;
     const bool sessionActive = active && visualKickMode && !forceIdle &&
-        source.usable && source.field.x <= sessionMaxX;
-    const bool visualKickReady = baseReady || sessionActive;
+        source.usable && clearanceLatched && goaliePenaltyAreaDistance(fd, source.field) <= 1.0;
+    const bool visualKickReady = baseReady || sessionActive ||
+        (clearanceLatched && source.usable && goaliePenaltyAreaDistance(fd, source.field) <= 1.0);
 
     if (!sessionActive && baseReady) {
         _interceptKickDisabled = false;
@@ -2508,6 +2533,7 @@ NodeStatus Analyze2::tick()
     if (forceIdle) {
         nextMode = "guard_idle";
         _interceptKickDisabled = false;
+        brain->tree->setEntry<bool>("goalie_clearance_latched", false);
     } else if (!visualKickReady) {
         nextMode = brain->data->ballDetected ? "guard_defend" : "guard_idle";
         _interceptKickDisabled = false;
@@ -2562,14 +2588,25 @@ NodeStatus GoalieIdleHome::tick()
         brain->client->setVelocity(0.0, 0.0, 0.0, false, false, false);
         return NodeStatus::SUCCESS;
     }
-    // 使用场地导航器返回门前锚点。距离较远时先转向目标并正向行走，
-    // 接近目标后同时精调位置和朝向，避免直接 vx/vy 平移造成长距离侧走或倒走。
-    brain->client->moveToPoseOnField3(
-        targetX, 0.0, 0.0,
-        0.8, 0.35,
-        vxLimit, vyLimit, vthetaLimit,
-        posTolerance, posTolerance, thetaTolerance,
-        true);
+    const auto &fd = brain->config->fieldDimensions;
+    const bool robotInPenaltyArea = goaliePointInPenaltyArea(
+        fd, {pose.x, pose.y, 0.0});
+    if (!robotInPenaltyArea) {
+        // 禁区外用路径规划，先转向目标再正向行走。
+        brain->client->moveToPoseOnField3(
+            targetX, 0.0, 0.0,
+            0.8, 0.35,
+            vxLimit, vyLimit, vthetaLimit,
+            posTolerance, posTolerance, thetaTolerance,
+            true);
+    } else {
+        // 进入禁区后不再调用导航器，只做门线附近的局部速度控制，始终面向对方球门。
+        const auto targetRobot = brain->data->field2robot({targetX, 0.0, 0.0});
+        const double vx = std::clamp(targetRobot.x, -vxLimit, vxLimit);
+        const double vy = std::clamp(targetRobot.y, -vyLimit, vyLimit);
+        const double vtheta = std::clamp(-pose.theta * 2.5, -vthetaLimit, vthetaLimit);
+        brain->client->setVelocity(vx, vy, vtheta, false, false, false);
+    }
     return NodeStatus::SUCCESS;
 }
 
@@ -2766,7 +2803,8 @@ rclcpp::Time RLVisionKick::_lastExitTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
 NodeStatus RLVisionKick::onStart()
 {
     const string goalieMode = brain->tree->getEntry<string>("goalie_mode");
-    const bool goalieKick = goalieMode == "block_kick" ||
+    const bool goalieKick = brain->tree->getEntry<string>("player_role") == "keeper" ||
+        goalieMode == "block_kick" ||
         goalieMode == "intercept_kick" ||
         brain->tree->getEntry<bool>("goalie_block_kick_active");
     _startTime = brain->get_clock()->now();
@@ -2820,7 +2858,8 @@ NodeStatus RLVisionKick::onRunning()
         std::cout << "[RLVisionKick] " << msg << std::endl;
     };
 
-    const bool goalieKick = brain->tree->getEntry<bool>("goalie_block_kick_active");
+    const bool goalieKick = brain->tree->getEntry<string>("player_role") == "keeper" ||
+        brain->tree->getEntry<bool>("goalie_block_kick_active");
     auto clearState = [&]() {
         brain->data->tmImInVisualKick = false;
         brain->tree->setEntry<bool>("goalie_block_kick_active", false);
@@ -3174,11 +3213,22 @@ NodeStatus Intercept2::tick()
     brain->get_parameter("strategy.goalie_simple_vy_max", vyMax);
     brain->get_parameter("strategy.goalie_simple_vtheta_limit", thetaMax);
 
-    // 导航到门前拦截点，并在到达附近后面向足球。距离较远时导航器会先
-    // 转向行进方向再正向行走；avoidObstacle=true 让移动过程绕开场上机器人。
+    const bool robotInPenaltyArea = goaliePointInPenaltyArea(
+        fd, {pose.x, pose.y, 0.0});
+    if (robotInPenaltyArea) {
+        // 进入禁区后停止使用导航器，直接沿门线局部修正，并始终面向对方球门。
+        const auto targetRobot = brain->data->field2robot({anchorX, targetY, 0.0});
+        const double vx = std::clamp(targetRobot.x, -vxMax, vxMax);
+        const double vy = std::clamp(targetRobot.y, -vyMax, vyMax);
+        const double vtheta = std::clamp(-pose.theta * 2.5, -thetaMax, thetaMax);
+        brain->client->setVelocity(vx, vy, vtheta, false, false, false);
+        return NodeStatus::SUCCESS;
+    }
+
+    // 禁区外导航到门前拦截点；接近目标后面向对方球门。
     const double targetTheta = std::atan2(ball.y - targetY, ball.x - anchorX);
     brain->client->moveToPoseOnField3(
-        anchorX, targetY, targetTheta,
+        anchorX, targetY, 0.0,
         0.8, 0.35,
         vxMax, vyMax, thetaMax,
         0.15, 0.15, 0.25,

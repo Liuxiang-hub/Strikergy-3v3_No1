@@ -603,8 +603,9 @@ void Brain::pubKickMsg() {
         goal_x = config->fieldDimensions.length / 2.0;
         goal_y = -config->fieldDimensions.width / 2.0;
     }
-    const double clearanceDir = kick_geometry::directionToOpponentGoal(
-        ballField.x, ballField.y, goal_x);
+    // 守门员解围始终沿场地 +x 方向（朝对方球门），不受球的横向位置、
+    // 普通球员 kickDir 或队友球权评分影响。
+    const double clearanceDir = 0.0;
     kickMsg.dir = toPInPI((goalieVisualKick ? clearanceDir : data->kickDir)
                          - data->robotPoseToField.theta);
     Pose2D goalPose;
