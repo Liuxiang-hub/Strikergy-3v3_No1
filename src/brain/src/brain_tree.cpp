@@ -3009,14 +3009,15 @@ NodeStatus RLVisionKick::onRunning()
     brain->get_parameter("strategy.auto_visual_kick.max_parallel_count", maxParallel);
     brain->get_parameter("strategy.auto_visual_kick.yield_my_cost_min", yieldMyCostMin);
     const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
-    const bool shouldYield = !normalOwnerPhase && teammateWinsVisualKick &&
+    const bool shouldYield = !goalieKick && !normalOwnerPhase && teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     double ownershipGraceMs = 1000.0;
     brain->get_parameter("strategy.cooperation.attacker_lost_ball_grace_ms", ownershipGraceMs);
     ownershipGraceMs = std::max(0.0, ownershipGraceMs);
     bool ownershipGraceExpired = false;
-    if (brain->data->tmImLead) {
+    // 守门员禁区解围不参与前锋球权选举，不启动丢失球权退出计时。
+    if (goalieKick || brain->data->tmImLead) {
         _ownershipLossActive = false;
         _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     } else if (!teammateExplicitlyLead) {
