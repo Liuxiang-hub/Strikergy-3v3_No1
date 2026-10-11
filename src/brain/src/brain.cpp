@@ -176,9 +176,9 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.goalie_simple_vtheta_limit", 1.5);
     declare_parameter<bool>("strategy.enable_auto_visual_kick", false);
     declare_parameter<double>("strategy.auto_visual_kick_enable_dist_min", 0.2);
-    declare_parameter<double>("strategy.auto_visual_kick_enable_dist_max", 4.0);
-    declare_parameter<double>("strategy.auto_visual_kick_enable_angle", 0.8);
-    declare_parameter<double>("strategy.auto_visual_kick_max_direction_error", 0.35);
+    declare_parameter<double>("strategy.auto_visual_kick_enable_dist_max", 2.5);
+    declare_parameter<double>("strategy.auto_visual_kick_enable_angle", 0.7);
+    declare_parameter<double>("strategy.auto_visual_kick_max_direction_error", 0.7);
     declare_parameter<double>("strategy.auto_visual_kick.real_ball_hold_ms", 1000.0);
     declare_parameter<double>("strategy.auto_visual_kick.current_real_ball_max_age_ms", 650.0);
     declare_parameter<double>("strategy.auto_visual_kick.near_ball_memory_reject_range", 0.45);
@@ -227,6 +227,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.set_play_stand.side_margin", 0.2);
 
     declare_parameter<double>("RLVisionKick.goalie_clearance_power", 6.0);
+    declare_parameter<double>("RLVisionKick.own_goal_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.0);
     declare_parameter<double>("RLVisionKick.own_kickoff_power", 2.0);
 
@@ -589,6 +590,8 @@ void Brain::pubKickMsg() {
         tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         tree->getEntry<bool>("setplay_is_attacker") &&
         tree->getEntry<bool>("setplay_attack_active");
+    const bool ownGoalKickPass =
+        realGameSubState == "GOAL_KICK" && ownSetPlayPass;
     const bool ownKickoffPass =
         data->isKickingOff &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
@@ -620,6 +623,8 @@ void Brain::pubKickMsg() {
 
     if (goalieVisualKick) {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
+    } else if (ownGoalKickPass) {
+        power = get_parameter("RLVisionKick.own_goal_kick_power").as_double();
     } else if (ownSetPlayPass) {
         power = get_parameter("RLVisionKick.own_setplay_pass_power").as_double();
     } else if (ownKickoffPass) {

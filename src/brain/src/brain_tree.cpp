@@ -1046,7 +1046,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
         Pose2D targetPose{};
         const double ownGoalX = -fd.length / 2.0;
         if (brain->config->playerId == 1) {
-            targetPose.x = ownGoalX + fd.penaltyAreaLength;
+            targetPose.x = ownGoalX + fd.penaltyDist;
             targetPose.y = 0.0;
         } else if (brain->config->playerId == 2) {
             const double dx = -ballPos.x;
@@ -1138,12 +1138,13 @@ NodeStatus GoToFreekickPosition::onRunning() {
         brain->data->kickDir = passDir;
         Pose2D targetPose{};
         if (isAttacker) {
-            // 等待阶段先站到球前方（球与中心点之间），满足开球条件后再交给
-            // 正常拼抢 attacker 的追球、绕球和 Adjust 流程处理。
-            constexpr double behindBallDistance = 0.5;
-            targetPose.x = ballPos.x + behindBallDistance * cos(passDir);
-            targetPose.y = ballPos.y + behindBallDistance * sin(passDir);
-            targetPose.theta = toPInPI(passDir + M_PI);
+            // 门球等待阶段站到己方罚球/发球点，面向实时足球；满足开球条件后
+            // 再交给正常 attacker 的追球、绕球和 Adjust 流程处理。
+            targetPose.x = -fd.length / 2.0 + fd.penaltyDist;
+            targetPose.y = 0.0;
+            targetPose.theta = atan2(
+                ballPos.y - targetPose.y,
+                ballPos.x - targetPose.x);
         } else {
             targetPose.x = 0.0;
             targetPose.y = supportTargetY;
@@ -1193,6 +1194,8 @@ NodeStatus GoToFreekickPosition::onRunning() {
 
     if (ownCornerOrThrowInSetPlay) {
         _cornerMode = true;
+        const bool ownCornerSetPlay =
+            brain->data->realGameSubState == "CORNER_KICK";
         const int selfIdx = brain->config->playerId - 1;
         const int selfId = brain->config->playerId;
         int attackerId = brain->tree->getEntry<int>("setplay_attacker_id");
@@ -1224,7 +1227,9 @@ NodeStatus GoToFreekickPosition::onRunning() {
 
         Pose2D targetPose{};
         if (!_cornerAttacker) {
-            targetPose = {-2.0, 0.0, 0.0};
+            targetPose = ownCornerSetPlay
+                ? Pose2D{3.0, 0.0, 0.0}
+                : Pose2D{-2.0, 0.0, 0.0};
         } else {
             const double len = std::max(1e-3, norm(ballPos.x, ballPos.y));
             constexpr double behindBallDistance = 0.5;
@@ -1241,12 +1246,14 @@ NodeStatus GoToFreekickPosition::onRunning() {
             if (!_cornerAttacker) return NodeStatus::RUNNING;
             brain->tree->setEntry<bool>("setplay_attac_backed", true);
             bool supportReady = false;
+            const double supportTargetX = ownCornerSetPlay ? 3.0 : -2.0;
             for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
                 if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
                 if (brain->data->tmStatus[i].role != "striker" &&
                     brain->data->tmStatus[i].role != "supporter") continue;
                 const auto &tm = brain->data->tmStatus[i].robotPoseToField;
-                supportReady = norm(tm.x + 2.0, tm.y) < 2.0 && fabs(toPInPI(tm.theta)) < 0.5;
+                supportReady = norm(tm.x - supportTargetX, tm.y) < 2.0 &&
+                    fabs(toPInPI(tm.theta)) < 0.5;
                 if (supportReady) break;
             }
             brain->tree->setEntry<bool>("setplay_support_ready", supportReady);
@@ -2890,7 +2897,7 @@ NodeStatus RLVisionKick::onRunning()
                 if (normalContest) {
                     visualKickVersion = "kV2";
                 } else if (ownCornerPass) {
-                    visualKickVersion = "kV1";
+                    visualKickVersion = "kV2";
                 }
                 brain->client->RLVisionKick(true, visualKickVersion);
                 _headScanStartTime = brain->get_clock()->now();
@@ -3012,21 +3019,28 @@ NodeStatus RLVisionKick::onRunning()
     const bool shouldYield = !goalieKick && !normalOwnerPhase && teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
-    double ownershipGraceMs = 1000.0;
-    brain->get_parameter("strategy.cooperation.attacker_lost_ball_grace_ms", ownershipGraceMs);
-    ownershipGraceMs = std::max(0.0, ownershipGraceMs);
     bool ownershipGraceExpired = false;
-    // 守门员禁区解围不参与前锋球权选举，不启动丢失球权退出计时。
-    if (goalieKick || brain->data->tmImLead) {
+    if (goalieKick) {
+        // 守门员解围不参与普通球员的队内球权选举，不能因为 tmImLead=false
+        // 在 1 秒后中断解围。清除可能遗留的宽限状态，其余 VisualKick
+        // 超时、丢球和姿态安全检查仍继续生效。
         _ownershipLossActive = false;
         _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    } else if (!teammateExplicitlyLead) {
-        if (!_ownershipLossActive) {
-            _ownershipLossActive = true;
-            _ownershipLossStartTime = brain->get_clock()->now();
+    } else {
+        double ownershipGraceMs = 1000.0;
+        brain->get_parameter("strategy.cooperation.attacker_lost_ball_grace_ms", ownershipGraceMs);
+        ownershipGraceMs = std::max(0.0, ownershipGraceMs);
+        if (brain->data->tmImLead) {
+            _ownershipLossActive = false;
+            _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        } else if (!teammateExplicitlyLead) {
+            if (!_ownershipLossActive) {
+                _ownershipLossActive = true;
+                _ownershipLossStartTime = brain->get_clock()->now();
+            }
+            ownershipGraceExpired =
+                brain->msecsSince(_ownershipLossStartTime) >= ownershipGraceMs;
         }
-        ownershipGraceExpired =
-            brain->msecsSince(_ownershipLossStartTime) >= ownershipGraceMs;
     }
 
     const bool elapsedEnough = elapsed > minMsecKick;
