@@ -6,7 +6,6 @@
          <SubTree ID="CamFindAndTrackBall" _autoremap="true" />
          <CamScanField _while="!ball_location_known" />
          <SetVelocity _while="!ball_location_known" />
-         <CamScanField _while="ball_location_known" />
          <GoToGoalBlockingPosition
             _while="ball_location_known"
             dist_to_goalline="{penalty_kick_goalie_dist_to_goalline}"
