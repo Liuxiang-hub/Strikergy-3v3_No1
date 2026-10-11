@@ -2562,21 +2562,14 @@ NodeStatus GoalieIdleHome::tick()
         brain->client->setVelocity(0.0, 0.0, 0.0, false, false, false);
         return NodeStatus::SUCCESS;
     }
-    if (std::abs(thetaError) > thetaTolerance) {
-        brain->client->setVelocity(0.0, 0.0,
-            std::clamp(2.5 * thetaError, -vthetaLimit, vthetaLimit), false, false, false);
-        return NodeStatus::SUCCESS;
-    }
-
-    const auto targetRobot = brain->data->field2robot({targetX, 0.0, 0.0});
-    double vx = std::clamp(targetRobot.x, -vxLimit, vxLimit);
-    double vy = std::clamp(targetRobot.y, -vyLimit, vyLimit);
-    if (dist < 1.5) {
-        const double scale = std::clamp(dist / 1.5, 0.25, 1.0);
-        vx *= scale;
-        vy *= scale;
-    }
-    brain->client->setVelocity(vx, vy, 0.0, false, false, false);
+    // 使用场地导航器返回门前锚点。距离较远时先转向目标并正向行走，
+    // 接近目标后同时精调位置和朝向，避免直接 vx/vy 平移造成长距离侧走或倒走。
+    brain->client->moveToPoseOnField3(
+        targetX, 0.0, 0.0,
+        0.8, 0.35,
+        vxLimit, vyLimit, vthetaLimit,
+        posTolerance, posTolerance, thetaTolerance,
+        true);
     return NodeStatus::SUCCESS;
 }
 
@@ -3146,7 +3139,6 @@ NodeStatus Intercept2::tick()
     const double halfGoalWidth = fd.goalWidth / 2.0;
     const double goalLineX = -fd.length / 2.0;
     const double anchorX = goalLineX + distToGoalLine;
-    const auto &pose = brain->data->robotPoseToField;
     const auto &ball = brain->data->ball.posToField;
     const double ballVx = brain->data->ballEstVelX;
     const double ballVy = brain->data->ballEstVelY;
@@ -3176,25 +3168,21 @@ NodeStatus Intercept2::tick()
         }
     }
 
-    double xKp = 0.9, yKp = 2.2, vxMax = 1.2, vyMax = 0.8;
-    double thetaKp = 1.4, thetaMax = 1.5;
-    brain->get_parameter("strategy.goalie_simple_x_kp", xKp);
-    brain->get_parameter("strategy.goalie_simple_y_kp", yKp);
+    double vxMax = 1.2, vyMax = 0.8;
+    double thetaMax = 1.5;
     brain->get_parameter("strategy.goalie_simple_vx_max", vxMax);
     brain->get_parameter("strategy.goalie_simple_vy_max", vyMax);
-    brain->get_parameter("strategy.goalie_simple_vtheta_kp", thetaKp);
     brain->get_parameter("strategy.goalie_simple_vtheta_limit", thetaMax);
 
-    const double vxField = std::clamp(xKp * (anchorX - pose.x), -vxMax, vxMax);
-    const double vyField = std::clamp(yKp * (targetY - pose.y), -vyMax, vyMax);
-    double vxRobot = vxField * std::cos(pose.theta) + vyField * std::sin(pose.theta);
-    double vyRobot = -vxField * std::sin(pose.theta) + vyField * std::cos(pose.theta);
-    vxRobot = std::clamp(vxRobot, -vxMax, vxMax);
-    vyRobot = std::clamp(vyRobot, -vyMax, vyMax);
-    const double vtheta = std::clamp(brain->data->ball.yawToRobot * thetaKp,
-                                     -thetaMax, thetaMax);
-
-    brain->client->setVelocity(vxRobot, vyRobot, vtheta, false, false, false);
+    // 导航到门前拦截点，并在到达附近后面向足球。距离较远时导航器会先
+    // 转向行进方向再正向行走；avoidObstacle=true 让移动过程绕开场上机器人。
+    const double targetTheta = std::atan2(ball.y - targetY, ball.x - anchorX);
+    brain->client->moveToPoseOnField3(
+        anchorX, targetY, targetTheta,
+        0.8, 0.35,
+        vxMax, vyMax, thetaMax,
+        0.15, 0.15, 0.25,
+        true);
     return NodeStatus::SUCCESS;
 }
 
