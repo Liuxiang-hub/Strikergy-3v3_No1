@@ -1221,8 +1221,11 @@ NodeStatus GoToFreekickPosition::onRunning() {
         }
         _cornerAttacker = attackerId == selfId;
         brain->tree->setEntry<bool>("setplay_is_attacker", _cornerAttacker);
+        const double setPlayTargetX = ownCornerSetPlay
+            ? oppGoalX - fd.penaltyDist
+            : 0.0;
         if (_cornerAttacker && brain->tree->getEntry<bool>("setplay_attack_active")) {
-            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            brain->data->kickDir = atan2(-ballPos.y, setPlayTargetX - ballPos.x);
             return NodeStatus::SUCCESS;
         }
 
@@ -1265,7 +1268,7 @@ NodeStatus GoToFreekickPosition::onRunning() {
                            setPlayRemainingSeconds));
             }
             brain->tree->setEntry<bool>("setplay_attack_active", true);
-            brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            brain->data->kickDir = atan2(-ballPos.y, setPlayTargetX - ballPos.x);
             brain->data->kickType = "shoot";
             brain->tree->setEntry<bool>("setplay_powerkick", false);
             return NodeStatus::SUCCESS;
@@ -1965,10 +1968,16 @@ NodeStatus CalcKickDir::tick()
     auto color = 0x00FF00FF;
 
     if (setPlayAttackActive) {
-        // 定位球等待结束后复用正常 attacker 全流程，但瞄准点始终固定为 (0, 0)。
+        // 定位球等待结束后复用正常 attacker 全流程；我方角球瞄准对方罚球点，其余定位球瞄准场地中心。
         nextKickType = "shoot";
+        const bool ownCornerSetPlay =
+            brain->data->realGameSubState == "CORNER_KICK" &&
+            brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
+        const double setPlayTargetX = ownCornerSetPlay
+            ? goalLineX - fd.penaltyDist
+            : 0.0;
         nextKickDir = kick_geometry::directionToTarget(
-            bPos.x, bPos.y, 0.0, 0.0, shootDir);
+            bPos.x, bPos.y, setPlayTargetX, 0.0, shootDir);
         color = 0xFF00FFFF;
     }
     else if (brain->data->isKickingOff) {
