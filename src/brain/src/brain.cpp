@@ -179,6 +179,8 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.auto_visual_kick_enable_dist_max", 2.5);
     declare_parameter<double>("strategy.auto_visual_kick_enable_angle", 0.7);
     declare_parameter<double>("strategy.auto_visual_kick_max_direction_error", 0.7);
+    declare_parameter<double>("strategy.auto_visual_kick.near_entry_range", 1.2);
+    declare_parameter<double>("strategy.auto_visual_kick.near_entry_direction_error", 1.0);
     declare_parameter<double>("strategy.auto_visual_kick.real_ball_hold_ms", 1000.0);
     declare_parameter<double>("strategy.auto_visual_kick.current_real_ball_max_age_ms", 650.0);
     declare_parameter<double>("strategy.auto_visual_kick.near_ball_memory_reject_range", 0.45);
@@ -1088,10 +1090,10 @@ void Brain::handleCooperation() {
         candidate.fallen = fallen;
         const double finalKickDirection = normalContestKickDirection(
             config->fieldDimensions, pose, ballPos);
-        const double robotToBallDirection = kick_geometry::directionToTarget(
-            pose.x, pose.y, ballPos.x, ballPos.y, pose.theta);
+        // 朝向评分表示机器人从当前身体朝向转到“自身预计最小代价踢球方向”
+        // 所需的转角，而不是机器人到球的接近线路与踢球方向之间的夹角。
         candidate.facingScore = kick_geometry::angleDistance(
-            finalKickDirection, robotToBallDirection) / M_PI;
+            finalKickDirection, pose.theta) / M_PI;
         candidate.cost = fallbackCost;
         if (normalOwnerPhase && seesBall) {
             // NORMAL 的基础球权只按距球直线距离判断。朝向只在后面的

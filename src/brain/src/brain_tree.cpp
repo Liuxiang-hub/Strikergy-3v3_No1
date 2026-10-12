@@ -2177,6 +2177,12 @@ NodeStatus StrikerDecide::tick() {
     brain->get_parameter("strategy.auto_visual_kick_max_direction_error", autoVisualKickMaxDirectionError);
     autoVisualKickMaxDirectionError = std::clamp(
         autoVisualKickMaxDirectionError, 0.05, M_PI);
+    double nearVisualKickRange = 1.2;
+    double nearVisualKickDirectionError = 1.0;
+    brain->get_parameter("strategy.auto_visual_kick.near_entry_range", nearVisualKickRange);
+    brain->get_parameter("strategy.auto_visual_kick.near_entry_direction_error", nearVisualKickDirectionError);
+    nearVisualKickRange = std::clamp(nearVisualKickRange, 0.3, autoVisualKickEnableDistMax);
+    nearVisualKickDirectionError = std::clamp(nearVisualKickDirectionError, 0.05, M_PI);
     const bool setPlayAttackActive =
         brain->tree->getEntry<bool>("setplay_attack_active");
     const bool keeperRole = brain->tree->getEntry<string>("player_role") == "keeper";
@@ -2332,8 +2338,8 @@ NodeStatus StrikerDecide::tick() {
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
-        visualKickDirectionReady &&
-        visualKickNearRealBall(brain);
+        fabs(deltaDir) <= nearVisualKickDirectionError &&
+        visualKickNearRealBall(brain, nearVisualKickRange);
 
     if ((brain->data->tmImLead || keeperRole || setPlayAttackActive) && nearBallVisualKick)
     {
@@ -3073,7 +3079,10 @@ NodeStatus RLVisionKick::onRunning()
         (ballRobotX < kVisionKickBadPoseBackX || std::fabs(ballYaw) > kVisionKickBadPoseYawLimit)
             ? _badPoseConsecutiveCount + 1
             : 0;
-    const bool nearRealBall = visualKickNearRealBall(brain);
+    double nearVisualKickRange = 1.2;
+    brain->get_parameter("strategy.auto_visual_kick.near_entry_range", nearVisualKickRange);
+    nearVisualKickRange = std::clamp(nearVisualKickRange, 0.3, 2.5);
+    const bool nearRealBall = visualKickNearRealBall(brain, nearVisualKickRange);
 
     double progressRangeDelta = 0.12;
     double progressBallForwardDelta = 0.15;

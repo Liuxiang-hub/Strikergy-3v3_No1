@@ -81,6 +81,8 @@ brain_node:
       auto_visual_kick_enable_angle: 0.7
       auto_visual_kick_max_direction_error: 0.7 # 未对准期望踢球方向时继续 Adjust，不直接进入 VisualKick
       auto_visual_kick:
+        near_entry_range: 1.2 # 近球快速入口距离，适度放宽以减少反复 Chase/Adjust
+        near_entry_direction_error: 1.0 # 近球入口允许约 57 度方向误差
         real_ball_hold_ms: 1000.0
         current_real_ball_max_age_ms: 650.0
         near_ball_memory_reject_range: 0.45
