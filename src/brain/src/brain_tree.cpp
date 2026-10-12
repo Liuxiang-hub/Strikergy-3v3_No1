@@ -987,7 +987,9 @@ NodeStatus GoToFreekickPosition::onRunning() {
         !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         (brain->data->realGameSubState == "CORNER_KICK" ||
          brain->data->realGameSubState == "GOAL_KICK" ||
-         brain->data->realGameSubState == "THROW_IN");
+         brain->data->realGameSubState == "THROW_IN" ||
+         brain->data->realGameSubState == "DIRECT_FREEKICK" ||
+         brain->data->realGameSubState == "INDIRECT_FREEKICK");
     if (_opponentSetPlayHolding && opponentStructuredSetPlay) {
         // 到位后锁定静止，不再因球位抖动重复规划，直到状态树退出本阶段。
         brain->client->setVelocity(0.0, 0.0, 0.0);
@@ -1091,6 +1093,11 @@ NodeStatus GoToFreekickPosition::onRunning() {
         brain->data->realGameSubState == "GOAL_KICK" &&
         brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         side == "attack";
+    const bool ownDirectOrIndirectFreeKick =
+        (brain->data->realGameSubState == "DIRECT_FREEKICK" ||
+         brain->data->realGameSubState == "INDIRECT_FREEKICK") &&
+        brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
+        side == "attack";
     const int setPlayRemainingSeconds =
         brain->tree->getEntry<int>("gc_secondary_time");
     const bool forceSetPlayKick =
@@ -1181,6 +1188,73 @@ NodeStatus GoToFreekickPosition::onRunning() {
             // 后续进入与正常拼抢完全相同的 attacker 决策链，仅固定瞄准中心点。
             brain->tree->setEntry<bool>("setplay_attack_active", true);
             brain->data->kickDir = atan2(-ballPos.y, -ballPos.x);
+            brain->data->kickType = "shoot";
+            brain->tree->setEntry<bool>("setplay_powerkick", false);
+            return NodeStatus::SUCCESS;
+        }
+
+        brain->client->moveToPoseOnField3(
+            targetPose.x, targetPose.y, targetPose.theta,
+            1.4, 0.4, 0.7, 0.5, 1.5,
+            0.2, 0.2, 0.15, true);
+        return NodeStatus::RUNNING;
+    }
+
+    if (ownDirectOrIndirectFreeKick) {
+        const int selfIdx = brain->config->playerId - 1;
+        const int selfId = brain->config->playerId;
+        int attackerId = brain->tree->getEntry<int>("setplay_attacker_id");
+        if (attackerId <= 0) {
+            attackerId = selfId;
+            double nearestDist = norm(robotPose.x - ballPos.x, robotPose.y - ballPos.y);
+            for (int i = 0; i < HL_MAX_NUM_PLAYERS; ++i) {
+                if (i == selfIdx || !brain->data->tmStatus[i].isAlive) continue;
+                if (brain->data->tmStatus[i].role != "striker" &&
+                    brain->data->tmStatus[i].role != "supporter") continue;
+                const auto &tm = brain->data->tmStatus[i];
+                const double tmDist = norm(tm.robotPoseToField.x - ballPos.x,
+                                           tm.robotPoseToField.y - ballPos.y);
+                if (tmDist < nearestDist - 0.03 ||
+                    (std::fabs(tmDist - nearestDist) <= 0.03 && i + 1 < attackerId)) {
+                    nearestDist = tmDist;
+                    attackerId = i + 1;
+                }
+            }
+            brain->tree->setEntry<int>("setplay_attacker_id", attackerId);
+        }
+
+        const bool isAttacker = attackerId == selfId;
+        brain->tree->setEntry<bool>("setplay_is_attacker", isAttacker);
+        const double targetX = oppGoalX;
+        if (isAttacker && brain->tree->getEntry<bool>("setplay_attack_active")) {
+            brain->data->kickDir = atan2(-ballPos.y, targetX - ballPos.x);
+            return NodeStatus::SUCCESS;
+        }
+
+        Pose2D targetPose{};
+        if (isAttacker) {
+            const double dx = targetX - ballPos.x;
+            const double dy = -ballPos.y;
+            const double length = std::max(1e-3, norm(dx, dy));
+            targetPose.x = ballPos.x - 0.5 * dx / length;
+            targetPose.y = ballPos.y - 0.5 * dy / length;
+            targetPose.theta = atan2(ballPos.y - targetPose.y,
+                                     ballPos.x - targetPose.x);
+        } else {
+            targetPose.x = oppGoalX - fd.penaltyDist;
+            targetPose.y = 0.0;
+            targetPose.theta = atan2(ballPos.y - targetPose.y,
+                                     ballPos.x - targetPose.x);
+        }
+
+        const double dist = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
+        const double deltaDir = toPInPI(targetPose.theta - robotPose.theta);
+        if (dist < setPlayDistTolerance && fabs(deltaDir) < setPlayThetaTolerance) {
+            brain->client->setVelocity(0.0, 0.0, 0.0);
+            if (!isAttacker) return NodeStatus::RUNNING;
+            brain->tree->setEntry<bool>("setplay_attac_backed", true);
+            brain->tree->setEntry<bool>("setplay_attack_active", true);
+            brain->data->kickDir = atan2(-ballPos.y, targetX - ballPos.x);
             brain->data->kickType = "shoot";
             brain->tree->setEntry<bool>("setplay_powerkick", false);
             return NodeStatus::SUCCESS;
@@ -1287,7 +1361,9 @@ NodeStatus GoToFreekickPosition::onRunning() {
         || brain->data->realGameSubState == "GOAL_KICK";
     const bool opponentRestartReference =
         (brain->data->realGameSubState == "THROW_IN" ||
-         brain->data->realGameSubState == "GOAL_KICK") &&
+         brain->data->realGameSubState == "GOAL_KICK" ||
+         brain->data->realGameSubState == "DIRECT_FREEKICK" ||
+         brain->data->realGameSubState == "INDIRECT_FREEKICK") &&
         !brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
 
     if (side == "attack") {
@@ -1973,9 +2049,13 @@ NodeStatus CalcKickDir::tick()
         const bool ownCornerSetPlay =
             brain->data->realGameSubState == "CORNER_KICK" &&
             brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
+        const bool ownDirectOrIndirectFreeKick =
+            (brain->data->realGameSubState == "DIRECT_FREEKICK" ||
+             brain->data->realGameSubState == "INDIRECT_FREEKICK") &&
+            brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side");
         const double setPlayTargetX = ownCornerSetPlay
             ? goalLineX - fd.penaltyDist
-            : 0.0;
+            : (ownDirectOrIndirectFreeKick ? goalLineX : 0.0);
         nextKickDir = kick_geometry::directionToTarget(
             bPos.x, bPos.y, setPlayTargetX, 0.0, shootDir);
         color = 0xFF00FFFF;
@@ -2252,11 +2332,10 @@ NodeStatus StrikerDecide::tick() {
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
-        !powerShootPossible &&
         visualKickDirectionReady &&
         visualKickNearRealBall(brain);
 
-    if ((brain->data->tmImLead || keeperRole) && nearBallVisualKick)
+    if ((brain->data->tmImLead || keeperRole || setPlayAttackActive) && nearBallVisualKick)
     {
         // 近球也必须先获得队内踢球权，避免多机同时进入 VisualKick。
         newDecision = "auto_visual_kick";
@@ -2279,9 +2358,7 @@ NodeStatus StrikerDecide::tick() {
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
         !ballInOpponentGoalArea &&
-        !powerShootPossible &&
         visualKickCurrentRealBallFresh(brain) &&
-        (setPlayAttackActive || brain->data->tmMyCost < 7.0) &&
         ballRange < autoVisualKickEnableDistMax &&
         ballRange > autoVisualKickEnableDistMin &&
         fabs(ballYaw) < autoVisualKickEnableAngle * 1.3 &&
@@ -3057,11 +3134,14 @@ NodeStatus RLVisionKick::onRunning()
     brain->get_parameter("strategy.auto_visual_kick.max_parallel_count", maxParallel);
     brain->get_parameter("strategy.auto_visual_kick.yield_my_cost_min", yieldMyCostMin);
     const bool normalOwnerPhase = normalFieldPlayerOwnershipPhase(brain);
-    const bool shouldYield = !goalieKick && !normalOwnerPhase && teammateWinsVisualKick &&
+    const bool setPlayAttackActive =
+        brain->tree->getEntry<bool>("setplay_attack_active");
+    const bool shouldYield = !goalieKick && !setPlayAttackActive &&
+        !normalOwnerPhase && teammateWinsVisualKick &&
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     bool ownershipGraceExpired = false;
-    if (goalieKick) {
+    if (goalieKick || setPlayAttackActive) {
         // 守门员解围不参与普通球员的队内球权选举，不能因为 tmImLead=false
         // 在 1 秒后中断解围。清除可能遗留的宽限状态，其余 VisualKick
         // 超时、丢球和姿态安全检查仍继续生效。
@@ -3090,7 +3170,7 @@ NodeStatus RLVisionKick::onRunning()
     if (normalOwnerPhase && !brain->data->tmImLead) {
         return beginExit("lost NORMAL ownership election");
     }
-    if (!normalOwnerPhase && teammateExplicitlyLead) {
+    if (!setPlayAttackActive && !normalOwnerPhase && teammateExplicitlyLead) {
         return beginExit(format("teammate %d took team ball ownership", explicitLeaderId));
     }
     if (shouldYield) return beginExit("teammate wins visual-kick slot");

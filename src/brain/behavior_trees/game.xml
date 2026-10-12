@@ -86,6 +86,10 @@
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='PLAY'" name="比赛">
+                            <SubTree ID="DirectFreeKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='DIRECT_FREEKICK' &amp;&amp; gc_is_sub_state_kickoff_side" />
+                            <SubTree ID="IndirectFreeKick" _autoremap="true"
+                                _while="gc_real_game_sub_state=='INDIRECT_FREEKICK' &amp;&amp; gc_is_sub_state_kickoff_side" />
                             <!-- 我方角球在 v20 恢复比赛后会被映射为 NONE/PLAY，必须在 PLAY 内单独接入。 -->
                             <SubTree ID="CornerKick" _autoremap="true"
                                 _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; gc_is_sub_state_kickoff_side &amp;&amp; setplay_pair_ready &amp;&amp; !setplay_kick_done" />

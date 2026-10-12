@@ -228,6 +228,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
 
     declare_parameter<double>("RLVisionKick.goalie_clearance_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_goal_kick_power", 6.0);
+    declare_parameter<double>("RLVisionKick.own_free_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.0);
     declare_parameter<double>("RLVisionKick.own_kickoff_power", 2.0);
 
@@ -586,18 +587,30 @@ void Brain::pubKickMsg() {
     const bool ownSetPlayPass =
         (realGameSubState == "GOAL_KICK" ||
          realGameSubState == "CORNER_KICK" ||
-         realGameSubState == "THROW_IN") &&
+         realGameSubState == "THROW_IN" ||
+         realGameSubState == "DIRECT_FREEKICK" ||
+         realGameSubState == "INDIRECT_FREEKICK") &&
         tree->getEntry<bool>("gc_is_sub_state_kickoff_side") &&
         tree->getEntry<bool>("setplay_is_attacker") &&
         tree->getEntry<bool>("setplay_attack_active");
     const bool ownGoalKickPass =
         realGameSubState == "GOAL_KICK" && ownSetPlayPass;
+    const bool ownFreeKickPass =
+        (realGameSubState == "DIRECT_FREEKICK" ||
+         realGameSubState == "INDIRECT_FREEKICK") && ownSetPlayPass;
+    const bool ownCornerKickPass =
+        realGameSubState == "CORNER_KICK" && ownSetPlayPass;
     const bool ownKickoffPass =
         data->isKickingOff &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
         tree->getEntry<bool>("gc_kickoff_active");
-    double goal_x = ownSetPlayPass ? 0.0 : config->fieldDimensions.length / 2;
+    double goal_x = config->fieldDimensions.length / 2.0;
     double goal_y = 0.0;
+    if (ownGoalKickPass || (ownSetPlayPass && !ownCornerKickPass && !ownFreeKickPass)) {
+        goal_x = 0.0;
+    } else if (ownCornerKickPass) {
+        goal_x = config->fieldDimensions.length / 2.0 - config->fieldDimensions.penaltyDist;
+    }
     if (ownKickoffPass) {
         // 我方中圈开球瞄准对方半场负 y 侧角点。
         goal_x = config->fieldDimensions.length / 2.0;
@@ -626,6 +639,8 @@ void Brain::pubKickMsg() {
         power = get_parameter("RLVisionKick.goalie_clearance_power").as_double();
     } else if (ownGoalKickPass) {
         power = get_parameter("RLVisionKick.own_goal_kick_power").as_double();
+    } else if (ownFreeKickPass) {
+        power = get_parameter("RLVisionKick.own_free_kick_power").as_double();
     } else if (ownSetPlayPass) {
         power = get_parameter("RLVisionKick.own_setplay_pass_power").as_double();
     } else if (ownKickoffPass) {
@@ -2597,7 +2612,9 @@ void Brain::applyGameControlMessage(
     const bool structuredSetPlay =
         data->realGameSubState == "CORNER_KICK" ||
         data->realGameSubState == "GOAL_KICK" ||
-        data->realGameSubState == "THROW_IN";
+        data->realGameSubState == "THROW_IN" ||
+        data->realGameSubState == "DIRECT_FREEKICK" ||
+        data->realGameSubState == "INDIRECT_FREEKICK";
     if (!structuredSetPlay || data->realGameSubState != lastStructuredSetPlay) {
         tree->setEntry<bool>("setplay_kick_done", false);
     }
