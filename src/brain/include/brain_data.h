@@ -177,8 +177,14 @@ public:
     RobotRecoveryState recoveryState = RobotRecoveryState::IS_READY;
     bool isRecoveryAvailable = false; // 是否可以起身
     int currentRobotModeIndex = -1;
-    int recoveryPerformedRetryCount = 0; // 记录起身次数
+    int recoveryPerformedRetryCount = 0; // 已实际下发的起身命令次数
     bool recoveryPerformed = false;
+    rclcpp::Time recoveryAttemptStartTime;
+    // 每次真实倒地时保存最后可信的场地位姿。起身完成后，行为树以该位姿为
+    // 小范围位置先验重新做视觉定位，避免直接沿用起身期间可能跳变的里程计。
+    bool fallRecoveryLocalizationPending = false;
+    std::uint64_t fallRecoverySequence = 0;
+    Pose2D fallRecoveryPriorPose = {};
 
     // 用于调试
     rclcpp::Time timeLastDet; // 上次收到 Detection 消息的时间戳时间

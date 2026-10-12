@@ -170,8 +170,18 @@ brain_node:
       img_interval: 1 #每多少帧图像 log 一次, 如果希望更好的实时性或减少日志大小, 可以调高这个值. 但会造成 log 的时间精度降低.
     
     recovery:
-      retry_max_count: 2
+      retry_max_count: 3
       get_up_version: kV2 # kV1 | kV2
+      retry_command_timeout_msecs: 8000.0 # 起身命令未进入恢复模式且仍倒地时，8秒后补发下一次
+      relocalize_after_get_up: true
+      relocalize_xy_radius: 1.5            # 以上次可信位置为中心，只在 +/-1.5 m 内找位置
+      relocalize_settle_msecs: 800.0       # 起身后先静止，等待身体和相机稳定
+      relocalize_attempt_interval_msecs: 350.0
+      relocalize_stable_count: 3           # 连续三次结果一致才恢复比赛
+      relocalize_position_tolerance: 0.4   # 相邻结果最大位置差 (m)
+      relocalize_angle_tolerance: 0.45     # 相邻结果最大朝向差 (rad，约26度)
+      relocalize_warning_msecs: 12000.0    # 超时只报警，仍保持静止，不带错定位继续跑
+      midfield_ambiguity_half_width: 1.0  # 倒地前距中线 |x|<=1m（覆盖整条场宽）时，起身后静止
 
     vision:
       image_topic: "/boostercamera/head/rgb" #相机topic统一命名，topic名称不需更改
