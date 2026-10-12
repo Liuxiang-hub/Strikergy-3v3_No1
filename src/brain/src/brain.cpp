@@ -179,8 +179,8 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("strategy.auto_visual_kick_enable_dist_max", 2.5);
     declare_parameter<double>("strategy.auto_visual_kick_enable_angle", 0.7);
     declare_parameter<double>("strategy.auto_visual_kick_max_direction_error", 0.7);
-    declare_parameter<double>("strategy.auto_visual_kick.near_entry_range", 1.2);
-    declare_parameter<double>("strategy.auto_visual_kick.near_entry_direction_error", 1.0);
+    declare_parameter<double>("strategy.auto_visual_kick.near_entry_range", 1.0);
+    declare_parameter<double>("strategy.auto_visual_kick.near_entry_direction_error", 1.2);
     declare_parameter<double>("strategy.auto_visual_kick.real_ball_hold_ms", 1000.0);
     declare_parameter<double>("strategy.auto_visual_kick.current_real_ball_max_age_ms", 650.0);
     declare_parameter<double>("strategy.auto_visual_kick.near_ball_memory_reject_range", 0.45);
@@ -232,7 +232,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("RLVisionKick.own_goal_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_free_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.0);
-    declare_parameter<double>("RLVisionKick.own_kickoff_power", 2.0);
+    declare_parameter<double>("RLVisionKick.own_kickoff_power", 1.0);
 
     declare_parameter<int>("obstacle_avoidance.depth_sample_step", 16);
     declare_parameter<double>("obstacle_avoidance.obstacle_min_height", 0.15);
@@ -614,9 +614,9 @@ void Brain::pubKickMsg() {
         goal_x = config->fieldDimensions.length / 2.0 - config->fieldDimensions.penaltyDist;
     }
     if (ownKickoffPass) {
-        // 我方中圈开球瞄准对方半场负 y 侧角点。
-        goal_x = config->fieldDimensions.length / 2.0;
-        goal_y = -config->fieldDimensions.width / 2.0;
+        // 我方中圈开球反向传向己方球门中心。
+        goal_x = -config->fieldDimensions.length / 2.0;
+        goal_y = 0.0;
     }
     // 守门员解围始终沿场地 +x 方向（朝对方球门），不受球的横向位置、
     // 普通球员 kickDir 或队友球权评分影响。
@@ -1047,21 +1047,20 @@ void Brain::handleCooperation() {
         if (playerId == selfId) return data->tmImAlive;
         return data->tmStatus[playerId - 1].isAlive;
     };
-    const bool fixedOwnKickoffPair =
+    const bool fixedOwnKickoffPlayer1 =
         kickoffTacticalPhase &&
         data->isKickingOff &&
         numOfPlayers == 3 &&
-        kickoffPlayerAlive(1) &&
-        kickoffPlayerAlive(2);
+        kickoffPlayerAlive(1);
     if (!data->isKickingOff && !data->isOpponentKickingOff) {
         data->kickoffStrikerGroupRank = -1;
         data->kickoffStrikerGroupLatched = false;
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 3v3 我方开球且 1、2 号都在线时，固定 1 号主罚、2 号等待，
-        // 不允许进入 PLAY 瞬间的 cost 排名改变开球者。缺人时才动态排序。
-        data->kickoffStrikerGroupRank = fixedOwnKickoffPair
+        // 3v3 我方开球且 1 号在线时，固定 1 号主罚；2 号由行为树保持静止，
+        // 不允许进入 PLAY 瞬间的 cost 排名改变开球者。1 号缺席时才动态排序。
+        data->kickoffStrikerGroupRank = fixedOwnKickoffPlayer1
             ? (selfId == 1 ? 0 : (selfId == 2 ? 1 : myStrikerCostRank))
             : myStrikerCostRank;
         data->kickoffStrikerGroupLatched = true;
@@ -1224,9 +1223,9 @@ void Brain::handleCooperation() {
         normalAttackerId = 0;
         normalAttackerLastConfirmedTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
-    // 我方双人开球期间，球权也必须与固定分工一致。否则即使 1 号的
+    // 我方开球期间，球权也必须与固定分工一致。否则即使 1 号的
     // kickoff rank 为 0，瞬时距离排名仍可能阻止它进入 VisualKick。
-    if (fixedOwnKickoffPair) ownerId = 1;
+    if (fixedOwnKickoffPlayer1) ownerId = 1;
 
     data->tmImLead = data->tmImAlive && ownerId == selfId;
     tree->setEntry<bool>("is_lead", data->tmImLead);

@@ -2061,10 +2061,11 @@ NodeStatus CalcKickDir::tick()
         color = 0xFF00FFFF;
     }
     else if (brain->data->isKickingOff) {
-        // 我方中圈开球瞄准对方半场负 y 侧角点；CAA 场地为 (7, -4.5)。
+        // 我方中圈开球由 1 号按正常 attacker 流程绕球、追球和调整，
+        // 但本阶段固定反向传向己方球门中心。
         nextKickType = "visual_kick";
         nextKickDir = kick_geometry::directionToTarget(
-            bPos.x, bPos.y, fd.length / 2.0, -fd.width / 2.0, shootDir);
+            bPos.x, bPos.y, -fd.length / 2.0, 0.0, shootDir);
         color = 0xFF00FFFF;
     }
     else if (
@@ -2177,8 +2178,8 @@ NodeStatus StrikerDecide::tick() {
     brain->get_parameter("strategy.auto_visual_kick_max_direction_error", autoVisualKickMaxDirectionError);
     autoVisualKickMaxDirectionError = std::clamp(
         autoVisualKickMaxDirectionError, 0.05, M_PI);
-    double nearVisualKickRange = 1.2;
-    double nearVisualKickDirectionError = 1.0;
+    double nearVisualKickRange = 1.0;
+    double nearVisualKickDirectionError = 1.2;
     brain->get_parameter("strategy.auto_visual_kick.near_entry_range", nearVisualKickRange);
     brain->get_parameter("strategy.auto_visual_kick.near_entry_direction_error", nearVisualKickDirectionError);
     nearVisualKickRange = std::clamp(nearVisualKickRange, 0.3, autoVisualKickEnableDistMax);
@@ -2197,13 +2198,13 @@ NodeStatus StrikerDecide::tick() {
     const bool assignedOpponentHalf = kickoffRank >= 0 && kickoffRank < 2;
     const bool isThreePlayerTeam = brain->config->numOfPlayers == 3;
     const bool ownKickoffPlayer2Hold =
-        brain->data->isKickingOff &&
-        brain->config->playerId == 2 &&
-        brain->tree->getEntry<bool>("setplay_pair_ready");
+        brain->data->isKickingOff && brain->config->playerId == 2;
     const bool kickoffAttack = kickoffPhase &&
-        (isThreePlayerTeam
-            ? kickoffRank == 0
-            : assignedOpponentHalf == ballInOpponentHalf);
+        (brain->data->isKickingOff
+            ? brain->config->playerId == 1
+            : (isThreePlayerTeam
+                ? kickoffRank == 0
+                : assignedOpponentHalf == ballInOpponentHalf));
     const bool kickoffHold = kickoffPhase && (!kickoffAttack || ownKickoffPlayer2Hold);
     // NORMAL 只认统一选举结果；开球则直接认锁存的主罚分工，不能再被
     // 进入 PLAY 瞬间的实时成本排名挡在 VisualKick 之外。
@@ -2214,7 +2215,9 @@ NodeStatus StrikerDecide::tick() {
     // No strategy calculation below may consume a placeholder ball. During a
     // kickoff we can still choose the latched stand group without a live ball.
     if (!kickoffBallKnown) {
-        const string newDecision = kickoffHold ? "kickoff_hold" : "find";
+        const string newDecision = ownKickoffPlayer2Hold
+            ? "kickoff_hold_static"
+            : (kickoffHold ? "kickoff_hold" : "find");
         const auto color = kickoffHold ? 0x00AAFFFF : 0xFFFFFFFF;
         brain->data->tmImInVisualKick = false;
         hasLastDeltaDir = false;
@@ -2352,7 +2355,7 @@ NodeStatus StrikerDecide::tick() {
     else if (kickoffHold)
     {
         // 非球所在半区的两名前锋移动到预设待命点，仍由上层相机节点跟踪球。
-        newDecision = "kickoff_hold";
+        newDecision = ownKickoffPlayer2Hold ? "kickoff_hold_static" : "kickoff_hold";
         color = 0x00AAFFFF;
         log(format(
             "kickoff stand: groupRank=%d ballHalf=%s",
@@ -3079,7 +3082,7 @@ NodeStatus RLVisionKick::onRunning()
         (ballRobotX < kVisionKickBadPoseBackX || std::fabs(ballYaw) > kVisionKickBadPoseYawLimit)
             ? _badPoseConsecutiveCount + 1
             : 0;
-    double nearVisualKickRange = 1.2;
+    double nearVisualKickRange = 1.0;
     brain->get_parameter("strategy.auto_visual_kick.near_entry_range", nearVisualKickRange);
     nearVisualKickRange = std::clamp(nearVisualKickRange, 0.3, 2.5);
     const bool nearRealBall = visualKickNearRealBall(brain, nearVisualKickRange);
@@ -5087,17 +5090,18 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 我方开球：1号站在 (-1.5, 1.0)，朝向中点处的足球。
-                tx = -1.5;
-                ty = 1.0;
+                // 我方开球 READY：1号站在 (-1, 0)，面向中点处的足球。
+                tx = -1.0;
+                ty = 0.0;
                 ttheta = std::atan2(-ty, -tx);
             } else {
                 tx = -2.3;
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            tx = isKickoff ? - fd.circleRadius + 1.0 : -4.5;
-            ty = isKickoff ? -3.5 : -0.5;
+            tx = isKickoff ? -4.0 : -4.5;
+            ty = isKickoff ? 0.0 : -0.5;
+            if (isKickoff) ttheta = std::atan2(-ty, -tx);
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
             //ty = fd.goalAreaWidth / 2.0;

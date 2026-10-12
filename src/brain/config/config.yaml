@@ -81,8 +81,8 @@ brain_node:
       auto_visual_kick_enable_angle: 0.7
       auto_visual_kick_max_direction_error: 0.7 # 未对准期望踢球方向时继续 Adjust，不直接进入 VisualKick
       auto_visual_kick:
-        near_entry_range: 1.2 # 近球快速入口距离，适度放宽以减少反复 Chase/Adjust
-        near_entry_direction_error: 1.0 # 近球入口允许约 57 度方向误差
+        near_entry_range: 1.0 # 近球快速入口保持 1 m，仅放宽方向误差
+        near_entry_direction_error: 1.2 # 近球入口允许约 69 度方向误差
         real_ball_hold_ms: 1000.0
         current_real_ball_max_age_ms: 650.0
         near_ball_memory_reject_range: 0.45
@@ -153,6 +153,7 @@ brain_node:
       goalie_clearance_power: 6.0 # 守门员解围力度(期望踢球距离, m)
       own_goal_kick_power: 5.0 # 我方球门球向 (0,0) 传球的力度
       own_free_kick_power: 6.0 # 我方直接/间接任意球向对方球门中心的力度
+      own_kickoff_power: 1.0 # 我方开球由1号反向传向己方球门中心
 
     locator:
       min_marker_count: 4
