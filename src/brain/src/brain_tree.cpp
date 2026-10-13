@@ -637,7 +637,9 @@ NodeStatus Chase::tick()
         vy = 0;
         vtheta = targetDir;
         if (fabs(targetDir) < 0.1 && ballRange > 2.0) vtheta = 0.0;
-        vx *= sigmoid(fabs(vtheta), 1, 3);
+        const double turnSpeedFactor =
+            std::max(0.35, sigmoid(fabs(vtheta), 1.3, 2.5));
+        vx *= turnSpeedFactor;
     }
 
     vx = cap(vx, vxLimit, -vxLimit);
