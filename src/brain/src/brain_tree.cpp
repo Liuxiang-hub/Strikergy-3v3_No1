@@ -1850,18 +1850,6 @@ NodeStatus KickoffStand::tick()
         return NodeStatus::SUCCESS;
     }
 
-    // 我方开球时，如果 1、2 号都在线，2 号在球仍位于中圈中心附近时保持静止；
-    // handleSpecialStates 会在球距 (0,0) 超过 0.3 m 或 BALL_FREE 后结束本机开球态，
-    // 随后2号立即回到 NORMAL 的统一进攻者选举。
-    const bool ownKickoffPlayer2Hold =
-        brain->data->isKickingOff &&
-        brain->config->playerId == 2 &&
-        brain->tree->getEntry<bool>("setplay_pair_ready");
-    if (ownKickoffPlayer2Hold) {
-        brain->client->setVelocity(0.0, 0.0, 0.0);
-        return NodeStatus::SUCCESS;
-    }
-
     double distTolerance, thetaTolerance, vxLimit, vyLimit, holdVthetaLimit;
     getInput("dist_tolerance", distTolerance);
     getInput("theta_tolerance", thetaTolerance);
@@ -2069,8 +2057,8 @@ NodeStatus CalcKickDir::tick()
     else if (brain->data->isKickingOff &&
              brain->tree->getEntry<bool>("setplay_pair_ready")) {
         // 我方中圈开球由 1 号按正常 attacker 流程绕球、追球和调整，
-        // 但本阶段固定反向传向己方球门中心，并最终调用普通 Kick 撞球。
-        nextKickType = "kick";
+        // 本阶段固定反向传向己方球门中心，并最终调用 VisualKick。
+        nextKickType = "visual_kick";
         nextKickDir = kick_geometry::directionToTarget(
             bPos.x, bPos.y, -fd.length / 2.0, 0.0, shootDir);
         color = 0xFF00FFFF;
@@ -2205,21 +2193,17 @@ NodeStatus StrikerDecide::tick() {
     const int kickoffRank = kickoffGroupRank(brain);
     const bool assignedOpponentHalf = kickoffRank >= 0 && kickoffRank < 2;
     const bool isThreePlayerTeam = brain->config->numOfPlayers == 3;
-    const bool ownKickoffPlayer2Hold =
+    const bool ownKickoffPlayer2Support =
         brain->data->isKickingOff &&
         brain->tree->getEntry<bool>("setplay_pair_ready") &&
         brain->config->playerId == 2;
-    const bool ownKickoffPlayer1Kick =
-        brain->data->isKickingOff &&
-        brain->tree->getEntry<bool>("setplay_pair_ready") &&
-        brain->config->playerId == 1;
     const bool kickoffAttack = kickoffPhase &&
         (brain->data->isKickingOff
             ? brain->config->playerId == 1
             : (isThreePlayerTeam
                 ? kickoffRank == 0
                 : assignedOpponentHalf == ballInOpponentHalf));
-    const bool kickoffHold = kickoffPhase && (!kickoffAttack || ownKickoffPlayer2Hold);
+    const bool kickoffHold = kickoffPhase && !kickoffAttack && !ownKickoffPlayer2Support;
     // NORMAL 只认统一选举结果；开球则直接认锁存的主罚分工，不能再被
     // 进入 PLAY 瞬间的实时成本排名挡在 VisualKick 之外。
     const bool visualKickOwner = keeperRole || setPlayAttackActive || kickoffAttack ||
@@ -2229,9 +2213,7 @@ NodeStatus StrikerDecide::tick() {
     // No strategy calculation below may consume a placeholder ball. During a
     // kickoff we can still choose the latched stand group without a live ball.
     if (!kickoffBallKnown) {
-        const string newDecision = ownKickoffPlayer2Hold
-            ? "kickoff_hold_static"
-            : (kickoffHold ? "kickoff_hold" : "find");
+        const string newDecision = kickoffHold ? "kickoff_hold" : "find";
         const auto color = kickoffHold ? 0x00AAFFFF : 0xFFFFFFFF;
         brain->data->tmImInVisualKick = false;
         hasLastDeltaDir = false;
@@ -2248,6 +2230,17 @@ NodeStatus StrikerDecide::tick() {
         brain->log->logToScreen(
             "tree/value_threat", "Threat Level: unavailable, Kick Value: unavailable",
             0xFFFFFFFF, 60);
+        return NodeStatus::SUCCESS;
+    }
+
+    if (ownKickoffPlayer2Support) {
+        // 我方双人开球时，2号不再原地静止；有球位后立即按接应逻辑移动。
+        brain->data->tmImInVisualKick = false;
+        hasLastDeltaDir = false;
+        setOutput("decision_out", string("assist"));
+        log("own kickoff: player 2 active support");
+        brain->log->logToScreen(
+            "tree/Decide", "Decision: assist (own kickoff player 2)", 0x00FFFFFF);
         return NodeStatus::SUCCESS;
     }
 
@@ -2351,8 +2344,6 @@ NodeStatus StrikerDecide::tick() {
     auto color = 0xFFFFFFFF; // for log
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
-        !ownKickoffPlayer1Kick &&
-        !ownKickoffPlayer2Hold &&
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !ballInOpponentGoalArea &&
@@ -2370,7 +2361,7 @@ NodeStatus StrikerDecide::tick() {
     else if (kickoffHold)
     {
         // 非球所在半区的两名前锋移动到预设待命点，仍由上层相机节点跟踪球。
-        newDecision = ownKickoffPlayer2Hold ? "kickoff_hold_static" : "kickoff_hold";
+        newDecision = "kickoff_hold";
         color = 0x00AAFFFF;
         log(format(
             "kickoff stand: groupRank=%d ballHalf=%s",
@@ -2378,7 +2369,6 @@ NodeStatus StrikerDecide::tick() {
     }
     else if (
         enableAutoVisualKick &&
-        !ownKickoffPlayer1Kick &&
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
@@ -2423,7 +2413,9 @@ NodeStatus StrikerDecide::tick() {
         && ball.range < KICK_RANGE
     )
     {
-        if (ownKickoffPlayer1Kick) newDecision = "kick";
+        // 我方开球专用 visual_kick 不允许退回普通 Kick；尚未满足
+        // VisualKick 入口时继续 Adjust，满足后由前面的 VisualKick 分支接管。
+        if (brain->data->kickType == "visual_kick") newDecision = "adjust";
         else if (brain->data->kickType == "cross") newDecision = "cross";
         else if (powerShootPossible) newDecision = "power_kick";
         else { // kickType == kick
@@ -2600,12 +2592,15 @@ NodeStatus Analyze2::tick()
         clearanceDirectionError <= maxDirectionError;
 
     const auto &fd = brain->config->fieldDimensions;
-    // 只有球真正落入己方禁区才起踢解围；禁区前沿之外交给 guard_defend 防守。
-    const bool ballInOwnPenaltyArea =
-        source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength &&
+    // 守门员解围区沿场地 +x 方向比己方禁区前沿再延伸 1 m；
+    // y 方向仍严格使用禁区宽度，避免横向出击范围同时扩大。
+    constexpr double GOALIE_CLEARANCE_X_EXTENSION = 1.0;
+    const bool ballInGoalieClearanceArea =
+        source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength +
+                             GOALIE_CLEARANCE_X_EXTENSION &&
         std::fabs(source.field.y) < fd.penaltyAreaWidth / 2.0;
     bool clearanceLatched = brain->tree->getEntry<bool>("goalie_clearance_latched");
-    if (ballInOwnPenaltyArea) {
+    if (ballInGoalieClearanceArea) {
         clearanceLatched = true;
     } else if (!source.usable || goaliePenaltyAreaDistance(fd, source.field) > 1.0) {
         clearanceLatched = false;
@@ -2615,7 +2610,7 @@ NodeStatus Analyze2::tick()
     const bool baseReady = source.usable &&
         source.range <= maxRange && cooldownOk &&
         clearanceDirectionReady &&
-        ballInOwnPenaltyArea;
+        ballInGoalieClearanceArea;
     const bool sessionActive = active && visualKickMode && !forceIdle &&
         source.usable && clearanceLatched && goaliePenaltyAreaDistance(fd, source.field) <= 1.0;
     const bool visualKickReady = baseReady || sessionActive ||
@@ -2794,17 +2789,12 @@ NodeStatus Kick::onStart()
         double softKickoffSpeed = 0.3;
         brain->get_parameter("strategy.soft_kickoff", softKickoff);
         brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
-        const bool ownKickoffPlayer1Kick =
-            brain->data->isKickingOff &&
-            brain->tree->getEntry<bool>("setplay_pair_ready") &&
-            brain->config->playerId == 1;
         if (
             softKickoff
             && (brain->data->isFreekickKickingOff ||
                 (brain->data->isKickingOff &&
                  brain->tree->getEntry<bool>("setplay_pair_ready")))
             && !brain->tree->getEntry<bool>("setplay_powerkick")
-            && !ownKickoffPlayer1Kick
             ) speed = softKickoffSpeed;
         brain->client->crabWalk(angle, speed);
     } else if (_state == "stablize") {
@@ -2870,17 +2860,12 @@ NodeStatus Kick::onRunning()
             double softKickoffSpeed = 0.3;
             brain->get_parameter("strategy.soft_kickoff", softKickoff);
             brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
-            const bool ownKickoffPlayer1Kick =
-                brain->data->isKickingOff &&
-                brain->tree->getEntry<bool>("setplay_pair_ready") &&
-                brain->config->playerId == 1;
             if (
                 softKickoff
                 && (brain->data->isFreekickKickingOff ||
                     (brain->data->isKickingOff &&
                      brain->tree->getEntry<bool>("setplay_pair_ready")))
                 && !brain->tree->getEntry<bool>("setplay_powerkick")
-                && !ownKickoffPlayer1Kick
                 ) speed = softKickoffSpeed;
                 brain->client->crabWalk(angle, speed);
             }
@@ -5131,10 +5116,10 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            // 我方开球 READY：2号站在 (-3, 0)，面向中点处的足球。
-            tx = isKickoff ? -3.0 : -4.5;
-            ty = isKickoff ? 0.0 : -0.5;
-            if (isKickoff) ttheta = std::atan2(-ty, -tx);
+            // 我方开球 READY：2号站在 (-1, -2)，面向对方球门（场地 +x）。
+            tx = isKickoff ? -1.0 : -4.5;
+            ty = isKickoff ? -2.0 : -0.5;
+            if (isKickoff) ttheta = 0.0;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
             //ty = fd.goalAreaWidth / 2.0;

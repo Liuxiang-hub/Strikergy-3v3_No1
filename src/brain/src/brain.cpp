@@ -1099,7 +1099,7 @@ void Brain::handleCooperation() {
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 3v3 我方开球且 1 号在线时，固定 1 号主罚；2 号由行为树保持静止，
+        // 3v3 我方开球且 1 号在线时，固定 1 号主罚；2 号由行为树执行主动接应，
         // 不允许进入 PLAY 瞬间的 cost 排名改变开球者。1 号缺席时才动态排序。
         data->kickoffStrikerGroupRank = fixedOwnKickoffPlayer1
             ? (selfId == 1 ? 0 : (selfId == 2 ? 1 : myStrikerCostRank))
