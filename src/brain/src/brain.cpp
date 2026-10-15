@@ -232,7 +232,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("RLVisionKick.own_goal_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_free_kick_power", 6.0);
     declare_parameter<double>("RLVisionKick.own_setplay_pass_power", 5.0);
-    declare_parameter<double>("RLVisionKick.own_kickoff_power", 4.0);
+    declare_parameter<double>("RLVisionKick.own_kickoff_power", 3.0);
 
     declare_parameter<int>("obstacle_avoidance.depth_sample_step", 16);
     declare_parameter<double>("obstacle_avoidance.obstacle_min_height", 0.15);

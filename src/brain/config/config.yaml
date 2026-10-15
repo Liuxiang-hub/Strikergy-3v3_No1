@@ -153,7 +153,7 @@ brain_node:
       goalie_clearance_power: 6.0 # 守门员解围力度(期望踢球距离, m)
       own_goal_kick_power: 5.0 # 我方球门球向 (0,0) 传球的力度
       own_free_kick_power: 6.0 # 我方直接/间接任意球向对方球门中心的力度
-      own_kickoff_power: 4.0 # 我方开球由1号反向传向己方球门中心
+      own_kickoff_power: 3.0 # 我方开球由1号反向传向己方球门中心
 
     locator:
       min_marker_count: 4

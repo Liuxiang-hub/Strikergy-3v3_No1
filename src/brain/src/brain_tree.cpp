@@ -5104,8 +5104,8 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 我方开球 READY：1号站在 (1, 0)，面向中点处的足球。
-                tx = 1.0;
+                // 我方开球 READY：1号站在 (0.6, 0)，面向中点处的足球。
+                tx = 0.6;
                 ty = 0.0;
                 ttheta = std::atan2(-ty, -tx);
             } else {
