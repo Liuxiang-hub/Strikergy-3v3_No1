@@ -631,6 +631,15 @@ private:
     bool _positionLocked = false;
     bool _lockedTargetValid = false;
     Pose2D _lockedTargetPose = {0.0, 0.0, 0.0};
+    // 到位后以连续的里程计判断机器人是否真的被推离，避免场地定位跳变导致重新走位。
+    bool _lockedOdomValid = false;
+    Pose2D _lockedOdomPose = {0.0, 0.0, 0.0};
+    // READY 移动期间比较场地位姿与里程计增量，发现不可能的定位跳变时短暂停车。
+    bool _readyPoseSampleValid = false;
+    Pose2D _lastReadyFieldPose = {0.0, 0.0, 0.0};
+    Pose2D _lastReadyOdomPose = {0.0, 0.0, 0.0};
+    bool _readyPoseGuardActive = false;
+    int _readyPoseStableTicks = 0;
     std::string _lastGameState;
 };
 

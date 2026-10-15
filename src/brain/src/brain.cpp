@@ -1089,7 +1089,7 @@ void Brain::handleCooperation() {
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 开球 PLAY 内不锁死场上球员分工；1、2号都使用 NORMAL 角色选举。
+        // 对方开球沿用分组；我方开球时2号会静止，1号在球权选举处锁为主罚者。
         data->kickoffStrikerGroupRank = myStrikerCostRank;
         data->kickoffStrikerGroupLatched = true;
     }
@@ -1249,6 +1249,11 @@ void Brain::handleCooperation() {
                 msecsSince(normalAttackerLastConfirmedTime) < std::max(0.0, lostBallGraceMs)) {
                 ownerId = normalAttackerId;
             }
+        }
+        // 1、2号都在场的我方开球：2号按战术要求保持静止，因此必须同步
+        // 锁定1号为球权拥有者，避免2号被选成 attacker 后无人踢球。
+        if (ownKickoffNormalOwnerPhase) {
+            ownerId = 1;
         }
         normalAttackerId = ownerId;
     } else {

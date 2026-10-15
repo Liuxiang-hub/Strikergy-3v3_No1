@@ -2201,12 +2201,29 @@ NodeStatus StrikerDecide::tick() {
         (isThreePlayerTeam
             ? kickoffRank == 0
             : assignedOpponentHalf == ballInOpponentHalf);
-    // 我方开球时1、2号都直接复用 NORMAL；对方开球的原有待命分工不变。
+    // 我方开球时1号复用 NORMAL，2号由下面的 kickoff_still 分支持续静止；
+    // 对方开球的原有待命分工不变。
     const bool kickoffHold = kickoffPhase && !kickoffAttack && !normalOwnerPhase;
     // NORMAL（包括我方开球）只认统一选举结果；对方开球仍使用原有分工。
     const bool visualKickOwner = keeperRole || setPlayAttackActive || kickoffAttack ||
         (brain->data->tmImLead &&
          (normalOwnerPhase || brain->data->tmMyCostRank == 0));
+
+    const bool ownKickoffPlayer2Still =
+        kickoffPhase && brain->data->isKickingOff &&
+        brain->config->playerId == 2;
+    if (ownKickoffPlayer2Still) {
+        // 2号在我方开球 PLAY 有效期内不参与找球、接应或抢球；每帧明确
+        // 下发零速度，避免上一个 READY/导航动作的残余速度继续生效。
+        brain->data->tmImInVisualKick = false;
+        hasLastDeltaDir = false;
+        brain->client->setVelocity(0.0, 0.0, 0.0);
+        setOutput("decision_out", string("kickoff_still"));
+        log("own kickoff: player 2 holds still");
+        brain->log->logToScreen(
+            "tree/Decide", "Decision: kickoff_still (player 2)", 0x00AAFFFF);
+        return NodeStatus::SUCCESS;
+    }
 
     // No strategy calculation below may consume a placeholder ball. During a
     // kickoff we can still choose the latched stand group without a live ball.
@@ -5072,6 +5089,10 @@ NodeStatus GoToReadyPosition::tick()
     if (_lastGameState != gameState && gameState == "READY") {
         _positionLocked = false;
         _lockedTargetValid = false;
+        _lockedOdomValid = false;
+        _readyPoseSampleValid = false;
+        _readyPoseGuardActive = false;
+        _readyPoseStableTicks = 0;
     }
     _lastGameState = gameState;
 
@@ -5080,6 +5101,10 @@ NodeStatus GoToReadyPosition::tick()
     if (gameState != "READY") {
         _positionLocked = false;
         _lockedTargetValid = false;
+        _lockedOdomValid = false;
+        _readyPoseSampleValid = false;
+        _readyPoseGuardActive = false;
+        _readyPoseStableTicks = 0;
     }
 
     if (role == "striker" || role == "supporter") {
@@ -5105,9 +5130,9 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            // 我方开球 READY：2号站在 (-4, -3)，面向对方球门（场地 +x）。
-            tx = isKickoff ? -4.0 : -4.5;
-            ty = isKickoff ? -3.0 : -0.5;
+            // 我方开球 READY：2号站在 (-5.5, 1.0)，面向对方球门（场地 +x）。
+            tx = isKickoff ? -5.5 : -4.5;
+            ty = isKickoff ? 1.0 : -0.5;
             if (isKickoff) ttheta = 0.0;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
@@ -5128,8 +5153,53 @@ NodeStatus GoToReadyPosition::tick()
 
     const Pose2D targetPose{tx, ty, ttheta};
     const auto robotPose = brain->data->robotPoseToField;
+    const auto odomPose = brain->data->robotPoseToOdom;
     const double targetDistance = norm(targetPose.x - robotPose.x, targetPose.y - robotPose.y);
     const double targetThetaError = fabs(toPInPI(targetPose.theta - robotPose.theta));
+
+    // 场地定位的正常变化应与里程计增量大致一致。若单次场地位姿变化比
+    // 里程计多出 0.75m 或 0.60rad，则视为视觉定位跳变，先停车等待连续稳定。
+    // 这里只拦截突变，不改变定位器内部状态。
+    if (gameState == "READY") {
+        if (_readyPoseSampleValid) {
+            const double fieldStep = norm(
+                robotPose.x - _lastReadyFieldPose.x,
+                robotPose.y - _lastReadyFieldPose.y);
+            const double odomStep = norm(
+                odomPose.x - _lastReadyOdomPose.x,
+                odomPose.y - _lastReadyOdomPose.y);
+            const double fieldTurn = fabs(toPInPI(
+                robotPose.theta - _lastReadyFieldPose.theta));
+            const double odomTurn = fabs(toPInPI(
+                odomPose.theta - _lastReadyOdomPose.theta));
+            const bool localizationJump =
+                fieldStep > odomStep + 0.75 ||
+                fieldTurn > odomTurn + 0.60;
+
+            if (localizationJump) {
+                _readyPoseGuardActive = true;
+                _readyPoseStableTicks = 0;
+                brain->log->log("ready_pose_guard", rerun::TextLog(format(
+                    "localization jump: field_step=%.2f odom_step=%.2f field_turn=%.2f odom_turn=%.2f",
+                    fieldStep, odomStep, fieldTurn, odomTurn)));
+            } else if (_readyPoseGuardActive) {
+                const bool stable =
+                    fieldStep <= odomStep + 0.15 &&
+                    fieldTurn <= odomTurn + 0.15;
+                _readyPoseStableTicks = stable ? _readyPoseStableTicks + 1 : 0;
+                if (_readyPoseStableTicks >= 6) {
+                    _readyPoseGuardActive = false;
+                    _readyPoseStableTicks = 0;
+                    brain->log->log(
+                        "ready_pose_guard",
+                        rerun::TextLog("localization stable; resume READY navigation"));
+                }
+            }
+        }
+        _lastReadyFieldPose = robotPose;
+        _lastReadyOdomPose = odomPose;
+        _readyPoseSampleValid = true;
+    }
 
     // 站位目标可能因角色/开球方变化而改变，目标改变时必须解除旧锁存。
     if (!_lockedTargetValid
@@ -5138,20 +5208,43 @@ NodeStatus GoToReadyPosition::tick()
         _lockedTargetPose = targetPose;
         _lockedTargetValid = true;
         _positionLocked = false;
+        _lockedOdomValid = false;
     }
 
-    const double unlockDistance = std::max(distTolerance + 0.25, distTolerance * 1.5);
-    const double unlockTheta = std::max(thetaTolerance + 0.10, thetaTolerance * 1.5);
+    // 已经到位后不再用可能跳变的场地定位解锁。只有里程计确认机器人
+    // 实际平移或转动超出阈值，才重新导航到 READY 目标。
+    const double unlockOdomDistance = std::max(0.35, distTolerance * 0.75);
+    const double unlockOdomTheta = std::max(0.35, thetaTolerance * 2.0);
     if (_positionLocked) {
-        if (targetDistance <= unlockDistance && targetThetaError <= unlockTheta) {
+        if (!_lockedOdomValid) {
+            _lockedOdomPose = odomPose;
+            _lockedOdomValid = true;
+        }
+        const double odomDistance = norm(
+            odomPose.x - _lockedOdomPose.x,
+            odomPose.y - _lockedOdomPose.y);
+        const double odomTheta = fabs(toPInPI(
+            odomPose.theta - _lockedOdomPose.theta));
+        if (odomDistance <= unlockOdomDistance && odomTheta <= unlockOdomTheta) {
             brain->client->setVelocity(0, 0, 0);
             return NodeStatus::SUCCESS;
         }
         _positionLocked = false;
+        _lockedOdomValid = false;
+        brain->log->log("ready_pose_guard", rerun::TextLog(format(
+            "READY lock released by odometry: distance=%.2f theta=%.2f",
+            odomDistance, odomTheta)));
     }
 
     if (targetDistance <= distTolerance && targetThetaError <= thetaTolerance) {
         _positionLocked = true;
+        _lockedOdomPose = odomPose;
+        _lockedOdomValid = true;
+        brain->client->setVelocity(0, 0, 0);
+        return NodeStatus::SUCCESS;
+    }
+
+    if (_readyPoseGuardActive) {
         brain->client->setVelocity(0, 0, 0);
         return NodeStatus::SUCCESS;
     }
