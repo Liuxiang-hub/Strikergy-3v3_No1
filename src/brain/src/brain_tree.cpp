@@ -1850,8 +1850,9 @@ NodeStatus KickoffStand::tick()
         return NodeStatus::SUCCESS;
     }
 
-    // 我方开球时，如果 1、2 号都在线，2 号固定保持静止；
-    // 不能因为开球分组或实时评分变化而被重新选成进攻者。
+    // 我方开球时，如果 1、2 号都在线，2 号在球仍位于中圈中心附近时保持静止；
+    // handleSpecialStates 会在球距 (0,0) 超过 0.3 m 或 BALL_FREE 后结束本机开球态，
+    // 随后2号立即回到 NORMAL 的统一进攻者选举。
     const bool ownKickoffPlayer2Hold =
         brain->data->isKickingOff &&
         brain->config->playerId == 2 &&

@@ -709,13 +709,41 @@ void Brain::handleSpecialStates() {
         const bool gameControllerSaysBallFree =
             protocolVersion >= 20 &&
             tree->getEntry<int>("gc_secondary_time") <= 0;
+        // 只用本帧视觉球或可靠队友球触发，避免历史记忆球坐标让2号误判开球已完成。
+        const bool currentLocalBall = data->ballDetected;
+        const bool teammateBallReliable = tree->getEntry<bool>("tm_ball_pos_reliable");
+        const Point kickoffBallPosition = currentLocalBall
+            ? data->ball.posToField
+            : data->tmBall.posToField;
+        const bool kickoffBallKnown =
+            (currentLocalBall || teammateBallReliable) &&
+            std::isfinite(kickoffBallPosition.x) &&
+            std::isfinite(kickoffBallPosition.y);
+        constexpr double PLAYER2_KICKOFF_RELEASE_DISTANCE = 0.3;
+        const double kickoffBallDistanceFromCenter = std::hypot(
+            kickoffBallPosition.x, kickoffBallPosition.y);
+        const bool player2ObservedOwnKickoffMove =
+            data->isKickingOff &&
+            config->playerId == 2 &&
+            tree->getEntry<bool>("setplay_pair_ready") &&
+            kickoffBallKnown &&
+            kickoffBallDistanceFromCenter > PLAYER2_KICKOFF_RELEASE_DISTANCE;
         const bool legacyTimedOut =
             protocolVersion < 20 &&
             ((data->isKickingOff &&
               msecsSince(data->kickoffStartTime) > KICKOFF_DURATION * 1000) ||
              (data->isOpponentKickingOff &&
               msecsSince(data->opponentKickoffStartTime) > KICKOFF_DURATION * 1000));
-        if (gameControllerSaysBallFree || legacyTimedOut) {
+        if (player2ObservedOwnKickoffMove) {
+            RCLCPP_INFO(
+                get_logger(),
+                "[kickoff_player2_release] ball=(%.2f, %.2f), center_distance=%.2f > %.2f; switch to NORMAL",
+                kickoffBallPosition.x,
+                kickoffBallPosition.y,
+                kickoffBallDistanceFromCenter,
+                PLAYER2_KICKOFF_RELEASE_DISTANCE);
+        }
+        if (gameControllerSaysBallFree || player2ObservedOwnKickoffMove || legacyTimedOut) {
             data->isKickingOff = false;
             data->isOpponentKickingOff = false;
         }
