@@ -297,18 +297,8 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<string>("vision_config_path", "");
     declare_parameter<string>("vision_config_local_path", "");
 
-    declare_parameter<int>("recovery.retry_max_count", 3);
+    declare_parameter<int>("recovery.retry_max_count", 2);
     declare_parameter<string>("recovery.get_up_version", "kV1");
-    declare_parameter<double>("recovery.retry_command_timeout_msecs", 8000.0);
-    declare_parameter<bool>("recovery.relocalize_after_get_up", true);
-    declare_parameter<double>("recovery.relocalize_xy_radius", 1.5);
-    declare_parameter<double>("recovery.relocalize_settle_msecs", 800.0);
-    declare_parameter<double>("recovery.relocalize_attempt_interval_msecs", 350.0);
-    declare_parameter<int>("recovery.relocalize_stable_count", 3);
-    declare_parameter<double>("recovery.relocalize_position_tolerance", 0.4);
-    declare_parameter<double>("recovery.relocalize_angle_tolerance", 0.45);
-    declare_parameter<double>("recovery.relocalize_warning_msecs", 12000.0);
-    declare_parameter<double>("recovery.relocalize_turn_speed", 0.35);
 
     declare_parameter<string>("RLVisionKick.visual_kick_version", "kV2");
 }
@@ -1926,9 +1916,6 @@ void Brain::updateFallLocalizationHoldState(bool holdActive)
         fallLocalizationHoldActive_ = true;
         fallLocalizationHoldPose_ = data->robotPoseToField;
         fallLocalizationHoldOdomToField_ = data->odomToField;
-        data->fallRecoveryPriorPose = fallLocalizationHoldPose_;
-        data->fallRecoveryLocalizationPending = true;
-        ++data->fallRecoverySequence;
         RCLCPP_WARN(
             get_logger(),
             "Freezing field localization during fall recovery at (%.3f, %.3f, %.3f)",
@@ -2288,9 +2275,6 @@ void Brain::joystickCallback(const booster_interface::msg::RemoteControllerState
         {
             tree->setEntry<int>("control_state", 2);
             tree->setEntry<bool>("odom_calibrated", false);
-            // 人工重新定位接管后，解除起身后的中圈歧义锁；完成入场定位并按
-            // LT+B 恢复时，以人工确认的新定位为准。
-            data->fallRecoveryLocalizationPending = false;
             prtDebug("State => 2: RECALIBRATE");
             // playSound("search");
         }

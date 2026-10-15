@@ -799,38 +799,6 @@ private:
     Brain *brain;
 };
 
-// 起身后用倒地前最后可信位姿作位置先验，头部扫描并低速旋转身体扫场。
-// 只有连续多次视觉定位结果一致后才停止扫描并恢复后续比赛行为。
-class RecoverLocalizationAfterFall : public StatefulActionNode
-{
-public:
-    RecoverLocalizationAfterFall(const string &name, const NodeConfig &config, Brain *_brain)
-        : StatefulActionNode(name, config), brain(_brain) {}
-    static PortsList providedPorts() { return {}; }
-    NodeStatus onStart() override;
-    NodeStatus onRunning() override;
-    void onHalted() override;
-
-private:
-    enum class Phase { IDLE, WAIT_UPRIGHT, SETTLING, LOCATING };
-    NodeStatus step();
-    void beginEpisode();
-
-    Brain *brain;
-    Phase phase_ = Phase::IDLE;
-    std::uint64_t sequence_ = 0;
-    Pose2D priorPose_ = {};
-    Pose2D lastCandidate_ = {};
-    int stableCount_ = 0;
-    bool hasLastCandidate_ = false;
-    bool hasLastAttempt_ = false;
-    bool timeoutWarned_ = false;
-    std::int64_t lastMarkerFrameNs_ = 0;
-    rclcpp::Time phaseStart_;
-    rclcpp::Time lastAttemptTime_;
-    rclcpp::Time lastCandidateTime_;
-};
-
 class MoveToFarSetPlaySearchArea : public StatefulActionNode
 {
 public:

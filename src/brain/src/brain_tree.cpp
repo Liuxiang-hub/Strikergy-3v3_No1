@@ -231,7 +231,6 @@ void BrainTree::init()
     REGISTER_BUILDER(WaveHand)
     REGISTER_BUILDER(MoveHead)
     REGISTER_BUILDER(CheckAndStandUp)
-    REGISTER_BUILDER(RecoverLocalizationAfterFall)
     REGISTER_BUILDER(RLVisionKick)
     REGISTER_BUILDER(Intercept2)
 
@@ -5725,53 +5724,23 @@ NodeStatus CheckAndStandUp::tick()
     }
     brain->log->log("recovery", rerun::TextLog(format("Recovery retry count: %d, recoveryPerformed: %d recoveryState: %d currentRobotModeIndex: %d", brain->data->recoveryPerformedRetryCount, brain->data->recoveryPerformed, brain->data->recoveryState, brain->data->currentRobotModeIndex)));
 
-    const int retryMaxCount = std::max(
-        1, static_cast<int>(
-            brain->get_parameter("recovery.retry_max_count").get_value<int>()));
-    double retryCommandTimeoutMsecs = 8000.0;
-    brain->get_parameter("recovery.retry_command_timeout_msecs", retryCommandTimeoutMsecs);
-    retryCommandTimeoutMsecs = std::clamp(retryCommandTimeoutMsecs, 3000.0, 20000.0);
-
-    // mode 10 表示底层已经接管了本次恢复动作。清除“命令在途”标志，
-    // 但只有重新回到 HAS_FALLEN + damping(mode 1) 才会发送下一次。
-    if (brain->data->recoveryPerformed &&
-        brain->data->currentRobotModeIndex == 10) {
-        brain->data->recoveryPerformed = false;
-        brain->log->log("recovery", rerun::TextLog(format(
-            "Get-up attempt %d entered recovery planner",
-            brain->data->recoveryPerformedRetryCount)));
-    }
-
-    // 如果请求没有进入 mode 10，但机器人一直明确报告“仍倒地且已回阻尼”，
-    // 超时后允许补发下一次，避免一次丢失的 RPC 把后续尝试永久卡住。
-    if (brain->data->recoveryPerformed &&
-        brain->data->recoveryState == RobotRecoveryState::HAS_FALLEN &&
-        brain->data->currentRobotModeIndex == 1 &&
-        brain->data->recoveryAttemptStartTime.nanoseconds() > 0 &&
-        brain->msecsSince(brain->data->recoveryAttemptStartTime) >= retryCommandTimeoutMsecs) {
-        brain->data->recoveryPerformed = false;
-        brain->log->log("recovery", rerun::TextLog(format(
-            "Get-up attempt %d did not start within %.0f ms; enabling next attempt",
-            brain->data->recoveryPerformedRetryCount, retryCommandTimeoutMsecs)));
-    }
-
     if (!brain->data->recoveryPerformed &&
         brain->data->recoveryState == RobotRecoveryState::HAS_FALLEN &&
         // brain->data->isRecoveryAvailable && // 倒了就直接尝试RL起身，（不需要关注是否recoveryAailable）
         brain->data->currentRobotModeIndex == 1 && // is damping
-        brain->data->recoveryPerformedRetryCount < retryMaxCount) {
+        brain->data->recoveryPerformedRetryCount < brain->get_parameter("recovery.retry_max_count").get_value<int>()) {
         brain->data->shouldExitRLVisionKick = true;
-        brain->data->recoveryPerformedRetryCount += 1;
-        brain->data->recoveryAttemptStartTime = brain->get_clock()->now();
         brain->client->standUp();
         brain->data->recoveryPerformed = true;
-        brain->speak(format(
-            "Trying to stand up. Attempt %d of %d",
-            brain->data->recoveryPerformedRetryCount, retryMaxCount));
-        brain->log->log("recovery", rerun::TextLog(format(
-            "Dispatched get-up attempt %d/%d",
-            brain->data->recoveryPerformedRetryCount, retryMaxCount)));
+        brain->speak("Trying to stand up");
+        brain->log->log("recovery", rerun::TextLog(format("Recovery retry count: %d", brain->data->recoveryPerformedRetryCount)));
         return NodeStatus::SUCCESS;
+    }
+
+    if (brain->data->recoveryPerformed && brain->data->currentRobotModeIndex == 10) { // recover
+        brain->data->recoveryPerformedRetryCount +=1;
+        brain->data->recoveryPerformed = false;
+        brain->log->log("recovery", rerun::TextLog(format("Add retry count: %d", brain->data->recoveryPerformedRetryCount)));
     }
 
     // 机器人站着且是robocup步态，可以重置跌到爬起的状态
@@ -5786,206 +5755,6 @@ NodeStatus CheckAndStandUp::tick()
     return NodeStatus::SUCCESS;
 }
 
-void RecoverLocalizationAfterFall::beginEpisode()
-{
-    sequence_ = brain->data->fallRecoverySequence;
-    priorPose_ = brain->data->fallRecoveryPriorPose;
-    phase_ = Phase::WAIT_UPRIGHT;
-    stableCount_ = 0;
-    hasLastCandidate_ = false;
-    hasLastAttempt_ = false;
-    timeoutWarned_ = false;
-    lastMarkerFrameNs_ = 0;
-}
-
-NodeStatus RecoverLocalizationAfterFall::onStart()
-{
-    return step();
-}
-
-NodeStatus RecoverLocalizationAfterFall::onRunning()
-{
-    return step();
-}
-
-NodeStatus RecoverLocalizationAfterFall::step()
-{
-    const bool recovering =
-        brain->data->recoveryState == RobotRecoveryState::IS_FALLING ||
-        brain->data->recoveryState == RobotRecoveryState::HAS_FALLEN ||
-        brain->data->recoveryState == RobotRecoveryState::IS_GETTING_UP;
-
-    bool relocalizeEnabled = true;
-    brain->get_parameter("recovery.relocalize_after_get_up", relocalizeEnabled);
-
-    // 罚下/人工搬运时会走专门的入场定位流程，不套用倒地前局部先验。
-    if (!relocalizeEnabled || brain->tree->getEntry<bool>("gc_is_under_penalty") ||
-        brain->data->currentRobotModeIndex == 2) {
-        brain->data->fallRecoveryLocalizationPending = false;
-        phase_ = Phase::IDLE;
-        return NodeStatus::SUCCESS;
-    }
-
-    if (!brain->data->fallRecoveryLocalizationPending && !recovering) {
-        phase_ = Phase::IDLE;
-        return NodeStatus::SUCCESS;
-    }
-
-    if (sequence_ != brain->data->fallRecoverySequence || phase_ == Phase::IDLE)
-        beginEpisode();
-
-    // 定位恢复期间禁止比赛策略下发旧的移动指令。
-    brain->client->setVelocity(0.0, 0.0, 0.0);
-
-    const bool gaitReady = brain->data->currentRobotModeIndex == 8 ||
-                           brain->data->currentRobotModeIndex == 20;
-    if (recovering || brain->data->recoveryState != RobotRecoveryState::IS_READY || !gaitReady) {
-        phase_ = Phase::WAIT_UPRIGHT;
-        stableCount_ = 0;
-        hasLastCandidate_ = false;
-        hasLastAttempt_ = false;
-        return NodeStatus::RUNNING;
-    }
-
-    const auto now = brain->get_clock()->now();
-    double settleMsecs = 800.0;
-    double attemptIntervalMsecs = 350.0;
-    double warningMsecs = 12000.0;
-    double xyRadius = 1.5;
-    double positionTolerance = 0.4;
-    double angleTolerance = 0.45;
-    double turnSpeed = 0.35;
-    int stableRequired = 3;
-    brain->get_parameter("recovery.relocalize_settle_msecs", settleMsecs);
-    brain->get_parameter("recovery.relocalize_attempt_interval_msecs", attemptIntervalMsecs);
-    brain->get_parameter("recovery.relocalize_warning_msecs", warningMsecs);
-    brain->get_parameter("recovery.relocalize_xy_radius", xyRadius);
-    brain->get_parameter("recovery.relocalize_position_tolerance", positionTolerance);
-    brain->get_parameter("recovery.relocalize_angle_tolerance", angleTolerance);
-    brain->get_parameter("recovery.relocalize_turn_speed", turnSpeed);
-    brain->get_parameter("recovery.relocalize_stable_count", stableRequired);
-    settleMsecs = std::clamp(settleMsecs, 200.0, 3000.0);
-    attemptIntervalMsecs = std::clamp(attemptIntervalMsecs, 200.0, 2000.0);
-    warningMsecs = std::clamp(warningMsecs, 3000.0, 60000.0);
-    xyRadius = std::clamp(xyRadius, 0.5, 2.5);
-    positionTolerance = std::clamp(positionTolerance, 0.1, 1.0);
-    angleTolerance = std::clamp(angleTolerance, 0.1, M_PI / 2.0);
-    turnSpeed = std::clamp(fabs(turnSpeed), 0.15, 0.6);
-    stableRequired = std::clamp(stableRequired, 2, 6);
-
-    if (phase_ == Phase::WAIT_UPRIGHT) {
-        phase_ = Phase::SETTLING;
-        phaseStart_ = now;
-        brain->client->moveHead(0.35, 0.0);
-        brain->log->log("recovery/localization", rerun::TextLog(format(
-            "Upright; settling before relocalization. Prior=(%.2f, %.2f, %.1fdeg)",
-            priorPose_.x, priorPose_.y, rad2deg(priorPose_.theta))));
-        return NodeStatus::RUNNING;
-    }
-
-    if (phase_ == Phase::SETTLING) {
-        brain->client->moveHead(0.35, 0.0);
-        if (brain->msecsSince(phaseStart_) < settleMsecs)
-            return NodeStatus::RUNNING;
-        phase_ = Phase::LOCATING;
-        phaseStart_ = now;
-    }
-
-    // 起身后不能原地僵住：头部覆盖左右视野，同时低速旋转身体扫完整个场地。
-    // 定位器仍只信任倒地前位置附近，但不信任倒地后的朝向。
-    static constexpr double scanYaw[] = {-1.15, -0.65, 0.0, 0.65, 1.15, 0.65, 0.0, -0.65};
-    const auto scanIndex = static_cast<std::size_t>(
-        static_cast<long long>(brain->msecsSince(phaseStart_) / 450.0) %
-        static_cast<long long>(sizeof(scanYaw) / sizeof(scanYaw[0])));
-    brain->client->moveHead(0.35, scanYaw[scanIndex]);
-    brain->client->setVelocity(0.0, 0.0, turnSpeed);
-
-    if (hasLastAttempt_ && brain->msecsSince(lastAttemptTime_) < attemptIntervalMsecs)
-        return NodeStatus::RUNNING;
-    hasLastAttempt_ = true;
-    lastAttemptTime_ = now;
-
-    // 同一帧视觉结果不能被重复累计为“三次稳定”；只消费新鲜的新标志物帧。
-    const auto markings = brain->data->getMarkings();
-    std::int64_t newestMarkerFrameNs = 0;
-    rclcpp::Time newestMarkerFrameTime;
-    for (const auto &marking : markings) {
-        if (marking.timePoint.nanoseconds() > newestMarkerFrameNs) {
-            newestMarkerFrameNs = marking.timePoint.nanoseconds();
-            newestMarkerFrameTime = marking.timePoint;
-        }
-    }
-    if (newestMarkerFrameNs <= lastMarkerFrameNs_ ||
-        newestMarkerFrameNs <= 0 ||
-        brain->msecsSince(newestMarkerFrameTime) > 800.0)
-        return NodeStatus::RUNNING;
-    lastMarkerFrameNs_ = newestMarkerFrameNs;
-
-    const auto markers = brain->data->getMarkersForLocator();
-    const auto fd = brain->config->fieldDimensions;
-    const double fieldMargin = 0.5;
-    const double priorX = std::clamp(
-        priorPose_.x, -fd.length / 2.0 - fieldMargin, fd.length / 2.0 + fieldMargin);
-    const double priorY = std::clamp(
-        priorPose_.y, -fd.width / 2.0 - fieldMargin, fd.width / 2.0 + fieldMargin);
-    PoseBox2D constraints{
-        std::max(-fd.length / 2.0 - fieldMargin, priorX - xyRadius),
-        std::min( fd.length / 2.0 + fieldMargin, priorX + xyRadius),
-        std::max(-fd.width / 2.0 - fieldMargin, priorY - xyRadius),
-        std::min( fd.width / 2.0 + fieldMargin, priorY + xyRadius),
-        -M_PI,
-        M_PI};
-
-    // 比普通在线微调多用一些粒子；位置范围小，但朝向允许整周搜索。
-    const auto result = brain->locator->locateRobot(
-        markers, constraints, 300, xyRadius, xyRadius, M_PI);
-
-    brain->log->log("recovery/localization", rerun::TextLog(format(
-        "attempt success=%d code=%d markers=%d residual=%.3f stable=%d/%d",
-        result.success, result.code, static_cast<int>(markers.size()), result.residual,
-        stableCount_, stableRequired)));
-
-    if (result.success) {
-        const bool recentCandidate = hasLastCandidate_ &&
-            brain->msecsSince(lastCandidateTime_) <= 1500.0;
-        const bool consistent = recentCandidate &&
-            norm(result.pose.x - lastCandidate_.x, result.pose.y - lastCandidate_.y) <= positionTolerance &&
-            fabs(toPInPI(result.pose.theta - lastCandidate_.theta)) <= angleTolerance;
-        stableCount_ = consistent ? stableCount_ + 1 : 1;
-        lastCandidate_ = result.pose;
-        lastCandidateTime_ = now;
-        hasLastCandidate_ = true;
-
-        if (stableCount_ >= stableRequired) {
-            brain->client->setVelocity(0.0, 0.0, 0.0);
-            brain->calibrateOdom(result.pose.x, result.pose.y, result.pose.theta, true);
-            brain->tree->setEntry<bool>("odom_calibrated", true);
-            brain->data->lastSuccessfulLocalizeTime = now;
-            brain->data->fallRecoveryLocalizationPending = false;
-            brain->client->moveHead(0.35, 0.0);
-            brain->log->log("recovery/localization", rerun::TextLog(format(
-                "Recovered localization at (%.2f, %.2f, %.1fdeg), residual=%.3f",
-                result.pose.x, result.pose.y, rad2deg(result.pose.theta), result.residual)));
-            brain->speak("Localization recovered");
-            phase_ = Phase::IDLE;
-            return NodeStatus::SUCCESS;
-        }
-    }
-
-    if (!timeoutWarned_ && brain->msecsSince(phaseStart_) >= warningMsecs) {
-        timeoutWarned_ = true;
-        brain->log->log("recovery/localization", rerun::TextLog(
-            "Still waiting for a stable visual localization; gameplay remains blocked"));
-        brain->speak("Waiting for localization");
-    }
-    return NodeStatus::RUNNING;
-}
-
-void RecoverLocalizationAfterFall::onHalted()
-{
-    brain->client->setVelocity(0.0, 0.0, 0.0);
-    // 不清除 pending；裁判暂停或行为树切换后仍需继续完成本次恢复定位。
-}
 
 
 
