@@ -5114,7 +5114,7 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            tx = isKickoff ? -4.0 : -4.5;
+            tx = isKickoff ? -5.0 : -4.5;
             ty = isKickoff ? 0.0 : -0.5;
             if (isKickoff) ttheta = std::atan2(-ty, -tx);
         } else if (strikerRank == 2) {
