@@ -208,7 +208,7 @@ brain_node:
         field_ascii_char_aspect: 2.0 # 终端字符高宽比修正
         field_ascii_width: 45 # ASCII 场地图内部宽度
     
-    game_control_ip: "172.20.10.2"  # 更改为具体的裁判机的 IP 地址
+    game_control_ip: "192.168.50.39"  # 当前场地裁判机；机器人 Alive 回包发送到此地址
 
     # for fun
     sound:
