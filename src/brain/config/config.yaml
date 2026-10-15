@@ -151,7 +151,7 @@ brain_node:
     RLVisionKick:
       visual_kick_version: kV2 # kV1 | kV2 修改此参数可更改visualkick调用版本
       goalie_clearance_power: 6.0 # 守门员解围力度(期望踢球距离, m)
-      own_goal_kick_power: 5.0 # 我方球门球向 (0,0) 传球的力度
+      own_goal_kick_power: 6.0 # 我方球门球向 (0,0) 传球的力度
       own_free_kick_power: 6.0 # 我方直接/间接任意球向对方球门中心的力度
       own_kickoff_power: 3.0 # 我方开球有效期间，1号踢球力度固定为3（方向为场地-x）
 

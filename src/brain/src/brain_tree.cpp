@@ -290,6 +290,8 @@ void BrainTree::initEntry()
     setEntry<string>("goalie_mode", "guard_idle");
     setEntry<bool>("goalie_block_kick_active", false);
     setEntry<bool>("goalie_clearance_latched", false);
+    setEntry<bool>("goalie_post_own_kickoff_trigger", false);
+    setEntry<bool>("goalie_post_own_kickoff_clearance", false);
     setEntry<bool>("penalty_kick_active", false);
     setEntry<bool>("penalty_kick_defending", false);
     setEntry<double>("penalty_kick_goalie_dist_to_goalline", 0.05);
@@ -335,7 +337,34 @@ void BrainTree::tick()
         if (playerId == brain->config->playerId) return brain->data->tmImAlive;
         return brain->data->tmStatus[playerId - 1].isAlive;
     };
-    setEntry<bool>("setplay_pair_ready", isPlayerAlive(1) && isPlayerAlive(2));
+    const bool livePairReady = isPlayerAlive(1) && isPlayerAlive(2);
+    const string gameState = getEntry<string>("gc_game_state");
+    const bool ownKickoffPairLatchScope =
+        brain->data->isKickingOff &&
+        (gameState == "SET" || gameState == "PLAY");
+
+    if (ownKickoffPairLatchScope && !_ownKickoffPairLatchValid) {
+        // 正常流程在 SET 首帧锁存；如果进程在 SET 末尾启动，则首次 PLAY
+        // 仍可补锁一次。此后整个开球阶段不再随通信瞬断而改变战术。
+        _ownKickoffPairReadyLatched = livePairReady;
+        _ownKickoffPairLatchValid = true;
+        RCLCPP_INFO(
+            brain->get_logger(),
+            "[kickoff_pair_latch] 1/2 ready=%d, game_state=%s; hold until kickoff ends",
+            _ownKickoffPairReadyLatched ? 1 : 0, gameState.c_str());
+    } else if (!ownKickoffPairLatchScope && _ownKickoffPairLatchValid) {
+        RCLCPP_INFO(
+            brain->get_logger(),
+            "[kickoff_pair_latch] kickoff ended; clear latched 1/2 readiness");
+        _ownKickoffPairLatchValid = false;
+        _ownKickoffPairReadyLatched = false;
+    }
+
+    // 仅我方普通开球使用锁存结果；其他定位球继续实时检查 1、2 号在线状态。
+    const bool effectivePairReady = ownKickoffPairLatchScope
+        ? _ownKickoffPairReadyLatched
+        : livePairReady;
+    setEntry<bool>("setplay_pair_ready", effectivePairReady);
     tree.tickOnce();
 }
 
@@ -2570,9 +2599,42 @@ NodeStatus Analyze2::tick()
     const string currentMode = brain->tree->getEntry<string>("goalie_mode");
     const bool active = brain->tree->getEntry<bool>("goalie_block_kick_active");
     const bool visualKickMode = currentMode == "block_kick" || currentMode == "intercept_kick";
+    const string gameState = brain->tree->getEntry<string>("gc_game_state");
+    const string realSubState = brain->tree->getEntry<string>("gc_real_game_sub_state");
+    const bool kickoffActive = brain->tree->getEntry<bool>("gc_kickoff_active");
+    const bool normalContest =
+        gameState == "PLAY" && !kickoffActive &&
+        (realSubState == "NONE" || realSubState == "OVERTIME");
+    const bool postOwnKickoffTrigger =
+        brain->tree->getEntry<bool>("goalie_post_own_kickoff_trigger");
+    if (normalContest && postOwnKickoffTrigger) {
+        _postOwnKickoffClearanceActive = true;
+        _postOwnKickoffClearanceStartTime = brain->get_clock()->now();
+        brain->tree->setEntry<bool>("goalie_post_own_kickoff_trigger", false);
+        brain->log->log(
+            "goalie/post_own_kickoff_clearance",
+            rerun::TextLog("start 10s own-half clearance window"));
+    }
+    if (_postOwnKickoffClearanceActive) {
+        const bool expired =
+            brain->msecsSince(_postOwnKickoffClearanceStartTime) >= 10000.0;
+        if (!normalContest || expired) {
+            _postOwnKickoffClearanceActive = false;
+            _postOwnKickoffClearanceStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
+            brain->log->log(
+                "goalie/post_own_kickoff_clearance",
+                rerun::TextLog(expired
+                    ? "10s clearance window expired and cleared"
+                    : "left NORMAL; clearance window cleared"));
+        }
+    }
+    brain->tree->setEntry<bool>(
+        "goalie_post_own_kickoff_clearance",
+        _postOwnKickoffClearanceActive);
+
     const bool forceIdle = brain->tree->getEntry<bool>("wait_for_opponent_kickoff") ||
         brain->tree->getEntry<bool>("ball_out") ||
-        brain->tree->getEntry<string>("gc_game_state") != "PLAY";
+        gameState != "PLAY";
 
     const auto source = getGoalieBallSource(brain);
     const auto target = getGoaliePredictTarget(brain, source);
@@ -2599,10 +2661,20 @@ NodeStatus Analyze2::tick()
     // 守门员解围区沿场地 +x 方向比己方禁区前沿再延伸 1 m；
     // y 方向仍严格使用禁区宽度，避免横向出击范围同时扩大。
     constexpr double GOALIE_CLEARANCE_X_EXTENSION = 1.0;
-    const bool ballInGoalieClearanceArea =
+    const bool ballInRegularGoalieClearanceArea =
         source.field.x < -fd.length / 2.0 + fd.penaltyAreaLength +
-                             GOALIE_CLEARANCE_X_EXTENSION &&
+                              GOALIE_CLEARANCE_X_EXTENSION &&
         std::fabs(source.field.y) < fd.penaltyAreaWidth / 2.0;
+    const bool ballInOwnHalf =
+        source.field.x >= -fd.length / 2.0 && source.field.x <= 0.0 &&
+        std::fabs(source.field.y) <= fd.width / 2.0;
+    const bool ballInGoalieClearanceArea =
+        ballInRegularGoalieClearanceArea ||
+        (_postOwnKickoffClearanceActive && ballInOwnHalf);
+    const bool ballInClearanceRetentionArea =
+        _postOwnKickoffClearanceActive
+            ? ballInOwnHalf
+            : goaliePenaltyAreaDistance(fd, source.field) <= 1.0;
     bool clearanceLatched = brain->tree->getEntry<bool>("goalie_clearance_latched");
     if (ballInGoalieClearanceArea) {
         clearanceLatched = true;
@@ -2611,14 +2683,17 @@ NodeStatus Analyze2::tick()
     }
     brain->tree->setEntry<bool>("goalie_clearance_latched", clearanceLatched);
     // 守门员在我方禁区内负责解围，不应被全队抢球权排名挡住。
+    const double effectiveMaxRange = _postOwnKickoffClearanceActive
+        ? fd.length + 1.0
+        : maxRange;
     const bool baseReady = source.usable &&
-        source.range <= maxRange && cooldownOk &&
+        source.range <= effectiveMaxRange && cooldownOk &&
         clearanceDirectionReady &&
         ballInGoalieClearanceArea;
     const bool sessionActive = active && visualKickMode && !forceIdle &&
-        source.usable && clearanceLatched && goaliePenaltyAreaDistance(fd, source.field) <= 1.0;
+        source.usable && clearanceLatched && ballInClearanceRetentionArea;
     const bool visualKickReady = baseReady || sessionActive ||
-        (clearanceLatched && source.usable && goaliePenaltyAreaDistance(fd, source.field) <= 1.0);
+        (clearanceLatched && source.usable && ballInClearanceRetentionArea);
 
     if (!sessionActive && baseReady) {
         _interceptKickDisabled = false;
@@ -3080,6 +3155,14 @@ NodeStatus RLVisionKick::onRunning()
     double minMsecKick = getInput<double>("min_msec_kick").value();
     double maxMsecKick = getInput<double>("max_msec_kick").value();
     double rangeThreshold = getInput<double>("range").value();
+    const bool postOwnKickoffGoalieClearance =
+        goalieKick && brain->tree->getEntry<bool>("goalie_post_own_kickoff_clearance");
+    if (postOwnKickoffGoalieClearance) {
+        // 仅在开球后10秒窗口放开 RLVisionKick 自身的远球退出阈值；窗口结束
+        // 后行为树会立即 halt 本次解围，并恢复 XML 中原有的 3.5m 范围。
+        rangeThreshold = std::max(
+            rangeThreshold, brain->config->fieldDimensions.length + 1.0);
+    }
 
     double ballRange = brain->data->ball.range;
     double ballRobotX = brain->data->ball.posToRobot.x;
@@ -3211,7 +3294,10 @@ NodeStatus RLVisionKick::onRunning()
     if (sessionElapsed >= maxTotal) return beginExit("session timeout");
     if (brain->msecsSince(_lastProgressTime) >= noProgressTimeout) return beginExit("no progress");
     if (elapsedEnough && _ballRangeOverLimitConsecutiveCount >= 4) return beginExit("ball range over limit");
-    if (elapsedEnough && !nearRealBall && brain->data->tmMyCost > 8.0) return beginExit("cost too high");
+    if (elapsedEnough && !postOwnKickoffGoalieClearance &&
+        !nearRealBall && brain->data->tmMyCost > 8.0) {
+        return beginExit("cost too high");
+    }
 
     if (elapsed > maxMsecKick) {
         int maxExtraRounds = 1;
@@ -5093,6 +5179,14 @@ NodeStatus GoToReadyPosition::tick()
         _readyPoseSampleValid = false;
         _readyPoseGuardActive = false;
         _readyPoseStableTicks = 0;
+        _kickoffReadyRefineActive = false;
+        _kickoffReadyTargetValid = false;
+        _kickoffReadyRefineDone = false;
+        _kickoffReadyFallbackActive = false;
+        _kickoffXLeftValid = false;
+        _kickoffXRightValid = false;
+        _kickoffMiddleLineValid = false;
+        _kickoffReadyStableTicks = 0;
     }
     _lastGameState = gameState;
 
@@ -5105,6 +5199,14 @@ NodeStatus GoToReadyPosition::tick()
         _readyPoseSampleValid = false;
         _readyPoseGuardActive = false;
         _readyPoseStableTicks = 0;
+        _kickoffReadyRefineActive = false;
+        _kickoffReadyTargetValid = false;
+        _kickoffReadyRefineDone = false;
+        _kickoffReadyFallbackActive = false;
+        _kickoffXLeftValid = false;
+        _kickoffXRightValid = false;
+        _kickoffMiddleLineValid = false;
+        _kickoffReadyStableTicks = 0;
     }
 
     if (role == "striker" || role == "supporter") {
@@ -5121,8 +5223,9 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 我方开球 READY：1号站在 (1, 0)，面向中点处的足球。
-                tx = 1.0;
+                // 球尚未放置时不能以球定位。先到中圈内的保守点，再用中线和
+                // 两个中圈 XCross 做局部精定位；0.45m 粗目标留出充分犯规余量。
+                tx = 0.45;
                 ty = 0.0;
                 ttheta = std::atan2(-ty, -tx);
             } else {
@@ -5130,9 +5233,9 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            // 我方开球 READY：2号站在 (-5.5, 1.0)，面向对方球门（场地 +x）。
-            tx = isKickoff ? -5.5 : -4.5;
-            ty = isKickoff ? 1.0 : -0.5;
+            // 我方开球 READY：2号站在 (-1.0, -3.5)，面向对方球门（场地 +x）。
+            tx = isKickoff ? -1.0 : -4.5;
+            ty = isKickoff ? -3.5 : -0.5;
             if (isKickoff) ttheta = 0.0;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
@@ -5199,6 +5302,309 @@ NodeStatus GoToReadyPosition::tick()
         _lastReadyFieldPose = robotPose;
         _lastReadyOdomPose = odomPose;
         _readyPoseSampleValid = true;
+    }
+
+    // 1号我方开球 READY：以“中线 + 中圈两端 XCross”做一次短时局部精定位。
+    // 这段控制完全在里程计坐标系内收口，成功后不再受场地定位慢漂影响。
+    const bool playerOneKickoffPlacement =
+        gameState == "READY" && isKickoff && brain->config->playerId == 1 &&
+        (role == "striker" || role == "supporter");
+
+    // 精定位完成后只看里程计，场地定位的慢漂不会触发重新走位。若机器人
+    // 确实被推离，再清空局部观测并重新执行一次短扫描。
+    if (playerOneKickoffPlacement && _kickoffReadyRefineDone &&
+        _positionLocked && _lockedOdomValid) {
+        const double odomDistance = norm(
+            odomPose.x - _lockedOdomPose.x,
+            odomPose.y - _lockedOdomPose.y);
+        const double odomTheta = std::fabs(toPInPI(
+            odomPose.theta - _lockedOdomPose.theta));
+        if (odomDistance <= 0.30 && odomTheta <= 0.30) {
+            brain->client->setVelocity(0, 0, 0);
+            return NodeStatus::SUCCESS;
+        }
+        _positionLocked = false;
+        _lockedOdomValid = false;
+        _kickoffReadyRefineActive = false;
+        _kickoffReadyTargetValid = false;
+        _kickoffReadyRefineDone = false;
+        _kickoffReadyFallbackActive = false;
+        _kickoffXLeftValid = false;
+        _kickoffXRightValid = false;
+        _kickoffMiddleLineValid = false;
+        _kickoffReadyStableTicks = 0;
+        brain->client->setVelocity(0, 0, 0);
+        return NodeStatus::SUCCESS;
+    }
+
+    if (playerOneKickoffPlacement && !_kickoffReadyRefineDone) {
+        constexpr double COARSE_DIST_TOLERANCE = 0.25;
+        constexpr double COARSE_THETA_TOLERANCE = 0.30;
+        constexpr double DESIRED_CENTER_DISTANCE = 0.55;
+        constexpr double SCAN_TIMEOUT_MS = 3500.0;
+        constexpr double TOTAL_REFINE_TIMEOUT_MS = 7000.0;
+        constexpr int STABLE_TICKS_REQUIRED = 10;
+
+        if (_kickoffReadyFallbackActive) {
+            // 局部几何识别失败后撤回己方半场安全点，避免继续停留在中线
+            // 对面的受限区域。安全点面向圆心，便于 SET/PLAY 后重新找球。
+            constexpr double FALLBACK_X = -1.0;
+            constexpr double FALLBACK_Y = 0.0;
+            constexpr double FALLBACK_THETA = 0.0;
+            const Pose2D fallbackPose{FALLBACK_X, FALLBACK_Y, FALLBACK_THETA};
+            const double fallbackDistance = norm(
+                fallbackPose.x - robotPose.x,
+                fallbackPose.y - robotPose.y);
+            const double fallbackThetaError = std::fabs(toPInPI(
+                fallbackPose.theta - robotPose.theta));
+
+            brain->client->moveHead(0.35, 0.0);
+            if (fallbackDistance <= 0.15 && fallbackThetaError <= 0.15) {
+                _kickoffReadyFallbackActive = false;
+                _kickoffReadyRefineDone = true;
+                _positionLocked = true;
+                _lockedTargetPose = fallbackPose;
+                _lockedTargetValid = true;
+                _lockedOdomPose = odomPose;
+                _lockedOdomValid = true;
+                brain->client->setVelocity(0, 0, 0);
+                brain->log->log(
+                    "ready_center_circle",
+                    rerun::TextLog("local refine failed; fallback (-1, 0) reached and locked"));
+            } else if (_readyPoseGuardActive) {
+                brain->client->setVelocity(0, 0, 0);
+            } else {
+                brain->client->moveToPoseOnField2(
+                    fallbackPose.x, fallbackPose.y, fallbackPose.theta,
+                    0.8, 0.35,
+                    std::min(vxLimit, 0.55), std::min(vyLimit, 0.35), 1.0,
+                    0.12, 0.12, 0.15, false);
+            }
+            return NodeStatus::SUCCESS;
+        }
+
+        if (!_kickoffReadyRefineActive) {
+            if (targetDistance > COARSE_DIST_TOLERANCE ||
+                targetThetaError > COARSE_THETA_TOLERANCE) {
+                if (_readyPoseGuardActive) {
+                    brain->client->setVelocity(0, 0, 0);
+                } else {
+                    brain->client->moveToPoseOnField2(
+                        tx, ty, ttheta, 0.8, 0.35,
+                        std::min(vxLimit, 0.55), std::min(vyLimit, 0.35), 1.0,
+                        0.12, 0.12, 0.15, false);
+                }
+                return NodeStatus::SUCCESS;
+            }
+
+            _kickoffReadyRefineActive = true;
+            _kickoffReadyRefineStartSec = brain->get_clock()->now().seconds();
+            _kickoffXLeftValid = false;
+            _kickoffXRightValid = false;
+            _kickoffMiddleLineValid = false;
+            _kickoffReadyTargetValid = false;
+            _kickoffReadyStableTicks = 0;
+            brain->client->setVelocity(0, 0, 0);
+        }
+
+        const double refineElapsedMs =
+            (brain->get_clock()->now().seconds() - _kickoffReadyRefineStartSec) * 1000.0;
+
+        // 扫头期间身体保持静止。两个 XCross 不必在同一帧出现；因身体不动，
+        // 它们的机器人坐标可以直接累计。识别窗口内循环左右扫描，并在每轮
+        // 末尾短暂回正，避免第一轮漏检后只能原地等待超时。
+        if (!_kickoffReadyTargetValid) {
+            constexpr double HEAD_SCAN_SIDE_MS = 750.0;
+            constexpr double HEAD_SCAN_CENTER_MS = 250.0;
+            constexpr double HEAD_SCAN_CYCLE_MS =
+                2.0 * HEAD_SCAN_SIDE_MS + HEAD_SCAN_CENTER_MS;
+            const double scanPhaseMs = std::fmod(refineElapsedMs, HEAD_SCAN_CYCLE_MS);
+            double scanYaw = 0.0;
+            if (scanPhaseMs < HEAD_SCAN_SIDE_MS) scanYaw = 1.05;
+            else if (scanPhaseMs < 2.0 * HEAD_SCAN_SIDE_MS) scanYaw = -1.05;
+            brain->client->moveHead(0.35, scanYaw);
+            brain->client->setVelocity(0, 0, 0);
+
+            auto markings = brain->data->getMarkingsByType({"XCross"});
+            for (const auto &marking : markings) {
+                const double ageMs = brain->msecsSince(marking.timePoint);
+                const double range = norm(marking.posToRobot.x, marking.posToRobot.y);
+                if (ageMs < 0.0 || ageMs > 500.0 ||
+                    marking.confidence < 50.0 || range < 0.4 || range > 3.5) {
+                    continue;
+                }
+                Point2D observed{marking.posToRobot.x, marking.posToRobot.y};
+                if (observed.y >= 0.0) {
+                    if (_kickoffXLeftValid) {
+                        _kickoffXLeft.x = 0.65 * _kickoffXLeft.x + 0.35 * observed.x;
+                        _kickoffXLeft.y = 0.65 * _kickoffXLeft.y + 0.35 * observed.y;
+                    } else {
+                        _kickoffXLeft = observed;
+                        _kickoffXLeftValid = true;
+                    }
+                } else {
+                    if (_kickoffXRightValid) {
+                        _kickoffXRight.x = 0.65 * _kickoffXRight.x + 0.35 * observed.x;
+                        _kickoffXRight.y = 0.65 * _kickoffXRight.y + 0.35 * observed.y;
+                    } else {
+                        _kickoffXRight = observed;
+                        _kickoffXRightValid = true;
+                    }
+                }
+            }
+
+            auto pointLineDistance = [](const Point2D &point, const Line &line) {
+                const double dx = line.x1 - line.x0;
+                const double dy = line.y1 - line.y0;
+                const double length = std::hypot(dx, dy);
+                if (length < 1e-3) return 1e9;
+                return std::fabs(
+                    dy * point.x - dx * point.y + line.x1 * line.y0 - line.y1 * line.x0) /
+                    length;
+            };
+
+            // 优先使用定位器明确识别出的 MiddleLine；如果定位略漂导致类型未定，
+            // 也允许一条同时穿过两个 XCross 的长直线作为中线。
+            double bestMiddleLineScore = -1e9;
+            const auto fieldLines = brain->data->getFieldLines();
+            for (const auto &line : fieldLines) {
+                if (brain->msecsSince(line.timePoint) < 0.0 ||
+                    brain->msecsSince(line.timePoint) > 500.0) {
+                    continue;
+                }
+                const double length = lineLength(line.posToRobot);
+                if (length < 0.4) continue;
+                const bool typedMiddle = line.type == LineType::MiddleLine;
+                const bool crossesBoth =
+                    _kickoffXLeftValid && _kickoffXRightValid &&
+                    pointLineDistance(_kickoffXLeft, line.posToRobot) < 0.35 &&
+                    pointLineDistance(_kickoffXRight, line.posToRobot) < 0.35;
+                if (!typedMiddle && !crossesBoth) continue;
+                // 同时穿过两个 XCross 是比依赖全局定位得到的类型标签更强的局部证据。
+                const double score = (crossesBoth ? 20.0 : 0.0) +
+                    (typedMiddle ? 5.0 : 0.0) + line.confidence + length;
+                if (!_kickoffMiddleLineValid || score > bestMiddleLineScore) {
+                    _kickoffMiddleLine = line.posToRobot;
+                    _kickoffMiddleLineValid = true;
+                    bestMiddleLineScore = score;
+                }
+            }
+
+            if (_kickoffXLeftValid && _kickoffXRightValid &&
+                _kickoffMiddleLineValid) {
+                const double crossSeparation = norm(
+                    _kickoffXLeft.x - _kickoffXRight.x,
+                    _kickoffXLeft.y - _kickoffXRight.y);
+                Point2D centerToRobot{
+                    0.5 * (_kickoffXLeft.x + _kickoffXRight.x),
+                    0.5 * (_kickoffXLeft.y + _kickoffXRight.y)};
+                const double centerRange = norm(centerToRobot.x, centerToRobot.y);
+                const bool middleLineAgrees =
+                    pointLineDistance(_kickoffXLeft, _kickoffMiddleLine) < 0.40 &&
+                    pointLineDistance(_kickoffXRight, _kickoffMiddleLine) < 0.40;
+
+                if (crossSeparation > 2.35 && crossSeparation < 3.65 &&
+                    centerRange > 0.15 && centerRange < 1.40 &&
+                    centerToRobot.x > 0.05 && middleLineAgrees) {
+                    const double c = std::cos(odomPose.theta);
+                    const double s = std::sin(odomPose.theta);
+                    const double centerOdomX = odomPose.x +
+                        c * centerToRobot.x - s * centerToRobot.y;
+                    const double centerOdomY = odomPose.y +
+                        s * centerToRobot.x + c * centerToRobot.y;
+
+                    // 中线法向给出球场 x 轴。选择指向“圆心到当前机器人”的一侧，
+                    // 从而保持在当前的对方半场一侧，而不会穿过中线。
+                    double lineDx = _kickoffMiddleLine.x1 - _kickoffMiddleLine.x0;
+                    double lineDy = _kickoffMiddleLine.y1 - _kickoffMiddleLine.y0;
+                    const double lineNorm = std::hypot(lineDx, lineDy);
+                    lineDx /= lineNorm;
+                    lineDy /= lineNorm;
+                    double normalRobotX = -lineDy;
+                    double normalRobotY = lineDx;
+                    if (normalRobotX * (-centerToRobot.x) +
+                        normalRobotY * (-centerToRobot.y) < 0.0) {
+                        normalRobotX = -normalRobotX;
+                        normalRobotY = -normalRobotY;
+                    }
+                    const double normalOdomX = c * normalRobotX - s * normalRobotY;
+                    const double normalOdomY = s * normalRobotX + c * normalRobotY;
+                    _kickoffReadyTargetOdom.x =
+                        centerOdomX + DESIRED_CENTER_DISTANCE * normalOdomX;
+                    _kickoffReadyTargetOdom.y =
+                        centerOdomY + DESIRED_CENTER_DISTANCE * normalOdomY;
+                    _kickoffReadyTargetOdom.theta = std::atan2(
+                        centerOdomY - _kickoffReadyTargetOdom.y,
+                        centerOdomX - _kickoffReadyTargetOdom.x);
+                    _kickoffReadyTargetValid = true;
+                    brain->log->log("ready_center_circle", rerun::TextLog(format(
+                        "local target acquired: cross_sep=%.2f center=(%.2f, %.2f)",
+                        crossSeparation, centerToRobot.x, centerToRobot.y)));
+                }
+            }
+
+            if (!_kickoffReadyTargetValid && refineElapsedMs >= SCAN_TIMEOUT_MS) {
+                // 识别不足时不在对方半场的中圈附近继续逗留，转去己方半场
+                // (-1, 0) 安全点；下一帧由上面的 fallback 分支持续导航到位。
+                _kickoffReadyFallbackActive = true;
+                _kickoffReadyTargetValid = false;
+                _kickoffReadyStableTicks = 0;
+                brain->client->moveHead(0.35, 0.0);
+                brain->client->setVelocity(0, 0, 0);
+                brain->log->log(
+                    "ready_center_circle",
+                    rerun::TextLog("3.5s local refine timeout; fallback to (-1, 0)"));
+                return NodeStatus::SUCCESS;
+            }
+        }
+
+        if (_kickoffReadyTargetValid) {
+            brain->client->moveHead(0.35, 0.0);
+            const double dx = _kickoffReadyTargetOdom.x - odomPose.x;
+            const double dy = _kickoffReadyTargetOdom.y - odomPose.y;
+            const double c = std::cos(odomPose.theta);
+            const double s = std::sin(odomPose.theta);
+            const double forwardError = c * dx + s * dy;
+            const double leftError = -s * dx + c * dy;
+            const double thetaError = toPInPI(
+                _kickoffReadyTargetOdom.theta - odomPose.theta);
+            const double positionError = std::hypot(forwardError, leftError);
+
+            if (positionError < 0.10 && std::fabs(thetaError) < 0.12) {
+                ++_kickoffReadyStableTicks;
+            } else {
+                _kickoffReadyStableTicks = 0;
+            }
+
+            if (_kickoffReadyStableTicks >= STABLE_TICKS_REQUIRED ||
+                refineElapsedMs >= TOTAL_REFINE_TIMEOUT_MS) {
+                _kickoffReadyRefineDone = true;
+                _positionLocked = true;
+                _lockedTargetPose = targetPose;
+                _lockedTargetValid = true;
+                _lockedOdomPose = odomPose;
+                _lockedOdomValid = true;
+                brain->client->setVelocity(0, 0, 0);
+                brain->log->log("ready_center_circle", rerun::TextLog(format(
+                    "refine finished: stable=%d timeout=%d pos_err=%.2f theta_err=%.2f",
+                    _kickoffReadyStableTicks >= STABLE_TICKS_REQUIRED ? 1 : 0,
+                    refineElapsedMs >= TOTAL_REFINE_TIMEOUT_MS ? 1 : 0,
+                    positionError, thetaError)));
+                return NodeStatus::SUCCESS;
+            }
+
+            double vx = 0.0;
+            double vy = 0.0;
+            const double vtheta = std::clamp(1.4 * thetaError, -0.55, 0.55);
+            if (std::fabs(thetaError) <= 0.35) {
+                vx = std::clamp(1.1 * forwardError, -0.18, 0.24);
+                vy = std::clamp(1.0 * leftError, -0.14, 0.14);
+            }
+            brain->client->setVelocity(vx, vy, vtheta, false, false, false);
+            return NodeStatus::SUCCESS;
+        }
+
+        return NodeStatus::SUCCESS;
     }
 
     // 站位目标可能因角色/开球方变化而改变，目标改变时必须解除旧锁存。

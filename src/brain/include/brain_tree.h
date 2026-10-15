@@ -43,6 +43,10 @@ private:
     Tree tree;
     Brain *brain;
     void initEntry();
+    // 我方开球在 SET（或首次进入 PLAY）只确认一次 1、2 号是否都在线。
+    // 锁存后不再受比赛中瞬时通信抖动影响，直到本次开球结束才清除。
+    bool _ownKickoffPairLatchValid = false;
+    bool _ownKickoffPairReadyLatched = false;
 };
 
 // ------------------------------- 比赛用 -------------------------------
@@ -111,6 +115,10 @@ private:
     bool _interceptKickDisabled = false;
     bool _interceptKickCloseStartValid = false;
     rclcpp::Time _interceptKickCloseStartTime;
+    // 全局比赛状态记录“我方开球 -> NORMAL”边沿；本节点消费触发后计时。
+    // NORMAL 前10秒守门员可在整个己方半场主动解围，超时或离开即清零。
+    bool _postOwnKickoffClearanceActive = false;
+    rclcpp::Time _postOwnKickoffClearanceStartTime;
 };
 
 // 未见球时回到门线前固定锚点。
@@ -640,6 +648,21 @@ private:
     Pose2D _lastReadyOdomPose = {0.0, 0.0, 0.0};
     bool _readyPoseGuardActive = false;
     int _readyPoseStableTicks = 0;
+    // 1号我方开球 READY 的局部精定位：短时扫描中线与中圈的两个 XCross，
+    // 在里程计坐标系中生成一次性目标，避免后续场地定位慢漂把机器人带出中圈。
+    bool _kickoffReadyRefineActive = false;
+    bool _kickoffReadyTargetValid = false;
+    bool _kickoffReadyRefineDone = false;
+    bool _kickoffReadyFallbackActive = false;
+    bool _kickoffXLeftValid = false;
+    bool _kickoffXRightValid = false;
+    bool _kickoffMiddleLineValid = false;
+    Point2D _kickoffXLeft = {0.0, 0.0};
+    Point2D _kickoffXRight = {0.0, 0.0};
+    Line _kickoffMiddleLine = {};
+    Pose2D _kickoffReadyTargetOdom = {0.0, 0.0, 0.0};
+    double _kickoffReadyRefineStartSec = 0.0;
+    int _kickoffReadyStableTicks = 0;
     std::string _lastGameState;
 };
 
