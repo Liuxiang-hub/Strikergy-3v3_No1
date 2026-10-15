@@ -767,8 +767,8 @@ private:
     Brain *brain;
 };
 
-// 起身后保持身体静止，用倒地前最后可信位姿作位置先验，允许全角度搜索。
-// 只有连续多次视觉定位结果一致后才恢复后续比赛行为。
+// 起身后用倒地前最后可信位姿作位置先验，头部扫描并低速旋转身体扫场。
+// 只有连续多次视觉定位结果一致后才停止扫描并恢复后续比赛行为。
 class RecoverLocalizationAfterFall : public StatefulActionNode
 {
 public:
@@ -780,7 +780,7 @@ public:
     void onHalted() override;
 
 private:
-    enum class Phase { IDLE, WAIT_UPRIGHT, SETTLING, LOCATING, MIDFIELD_AMBIGUITY_HOLD };
+    enum class Phase { IDLE, WAIT_UPRIGHT, SETTLING, LOCATING };
     NodeStatus step();
     void beginEpisode();
 

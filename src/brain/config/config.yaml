@@ -180,8 +180,8 @@ brain_node:
       relocalize_stable_count: 3           # 连续三次结果一致才恢复比赛
       relocalize_position_tolerance: 0.4   # 相邻结果最大位置差 (m)
       relocalize_angle_tolerance: 0.45     # 相邻结果最大朝向差 (rad，约26度)
-      relocalize_warning_msecs: 12000.0    # 超时只报警，仍保持静止，不带错定位继续跑
-      midfield_ambiguity_half_width: 1.0  # 倒地前距中线 |x|<=1m（覆盖整条场宽）时，起身后静止
+      relocalize_warning_msecs: 12000.0    # 超时报警并继续旋转扫场，不带错定位恢复比赛
+      relocalize_turn_speed: 0.35          # 起身稳定后身体旋转扫场速度 (rad/s)
 
     vision:
       image_topic: "/boostercamera/head/rgb" #相机topic统一命名，topic名称不需更改

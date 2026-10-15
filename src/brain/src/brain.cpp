@@ -308,7 +308,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     declare_parameter<double>("recovery.relocalize_position_tolerance", 0.4);
     declare_parameter<double>("recovery.relocalize_angle_tolerance", 0.45);
     declare_parameter<double>("recovery.relocalize_warning_msecs", 12000.0);
-    declare_parameter<double>("recovery.midfield_ambiguity_half_width", 1.0);
+    declare_parameter<double>("recovery.relocalize_turn_speed", 0.35);
 
     declare_parameter<string>("RLVisionKick.visual_kick_version", "kV2");
 }

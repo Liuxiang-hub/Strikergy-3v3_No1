@@ -2069,8 +2069,8 @@ NodeStatus CalcKickDir::tick()
     else if (brain->data->isKickingOff &&
              brain->tree->getEntry<bool>("setplay_pair_ready")) {
         // 我方中圈开球由 1 号按正常 attacker 流程绕球、追球和调整，
-        // 但本阶段固定反向传向己方球门中心。
-        nextKickType = "visual_kick";
+        // 但本阶段固定反向传向己方球门中心，并最终调用普通 Kick 撞球。
+        nextKickType = "kick";
         nextKickDir = kick_geometry::directionToTarget(
             bPos.x, bPos.y, -fd.length / 2.0, 0.0, shootDir);
         color = 0xFF00FFFF;
@@ -2209,6 +2209,10 @@ NodeStatus StrikerDecide::tick() {
         brain->data->isKickingOff &&
         brain->tree->getEntry<bool>("setplay_pair_ready") &&
         brain->config->playerId == 2;
+    const bool ownKickoffPlayer1Kick =
+        brain->data->isKickingOff &&
+        brain->tree->getEntry<bool>("setplay_pair_ready") &&
+        brain->config->playerId == 1;
     const bool kickoffAttack = kickoffPhase &&
         (brain->data->isKickingOff
             ? brain->config->playerId == 1
@@ -2347,6 +2351,7 @@ NodeStatus StrikerDecide::tick() {
     auto color = 0xFFFFFFFF; // for log
     const bool nearBallVisualKick =
         enableAutoVisualKick &&
+        !ownKickoffPlayer1Kick &&
         !ownKickoffPlayer2Hold &&
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
@@ -2373,6 +2378,7 @@ NodeStatus StrikerDecide::tick() {
     }
     else if (
         enableAutoVisualKick &&
+        !ownKickoffPlayer1Kick &&
         visualKickOwner &&
         !brain->tree->getEntry<bool>("ball_out") &&
         !brain->data->lose_ball &&
@@ -2417,7 +2423,8 @@ NodeStatus StrikerDecide::tick() {
         && ball.range < KICK_RANGE
     )
     {
-        if (brain->data->kickType == "cross") newDecision = "cross";
+        if (ownKickoffPlayer1Kick) newDecision = "kick";
+        else if (brain->data->kickType == "cross") newDecision = "cross";
         else if (powerShootPossible) newDecision = "power_kick";
         else { // kickType == kick
             double threatThreshold;
@@ -2787,12 +2794,17 @@ NodeStatus Kick::onStart()
         double softKickoffSpeed = 0.3;
         brain->get_parameter("strategy.soft_kickoff", softKickoff);
         brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
+        const bool ownKickoffPlayer1Kick =
+            brain->data->isKickingOff &&
+            brain->tree->getEntry<bool>("setplay_pair_ready") &&
+            brain->config->playerId == 1;
         if (
             softKickoff
             && (brain->data->isFreekickKickingOff ||
                 (brain->data->isKickingOff &&
                  brain->tree->getEntry<bool>("setplay_pair_ready")))
             && !brain->tree->getEntry<bool>("setplay_powerkick")
+            && !ownKickoffPlayer1Kick
             ) speed = softKickoffSpeed;
         brain->client->crabWalk(angle, speed);
     } else if (_state == "stablize") {
@@ -2858,12 +2870,17 @@ NodeStatus Kick::onRunning()
             double softKickoffSpeed = 0.3;
             brain->get_parameter("strategy.soft_kickoff", softKickoff);
             brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
+            const bool ownKickoffPlayer1Kick =
+                brain->data->isKickingOff &&
+                brain->tree->getEntry<bool>("setplay_pair_ready") &&
+                brain->config->playerId == 1;
             if (
                 softKickoff
                 && (brain->data->isFreekickKickingOff ||
                     (brain->data->isKickingOff &&
                      brain->tree->getEntry<bool>("setplay_pair_ready")))
                 && !brain->tree->getEntry<bool>("setplay_powerkick")
+                && !ownKickoffPlayer1Kick
                 ) speed = softKickoffSpeed;
                 brain->client->crabWalk(angle, speed);
             }
@@ -5105,8 +5122,8 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 我方开球 READY：1号站在 (0.6, 0)，面向中点处的足球。
-                tx = 0.6;
+                // 我方开球 READY：1号站在 (1, 0)，面向中点处的足球。
+                tx = 1.0;
                 ty = 0.0;
                 ttheta = std::atan2(-ty, -tx);
             } else {
@@ -5114,7 +5131,8 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            tx = isKickoff ? -5.0 : -4.5;
+            // 我方开球 READY：2号站在 (-4, 0)，面向中点处的足球。
+            tx = isKickoff ? -4.0 : -4.5;
             ty = isKickoff ? 0.0 : -0.5;
             if (isKickoff) ttheta = std::atan2(-ty, -tx);
         } else if (strikerRank == 2) {
@@ -5363,7 +5381,7 @@ NodeStatus RecoverLocalizationAfterFall::step()
     double xyRadius = 1.5;
     double positionTolerance = 0.4;
     double angleTolerance = 0.45;
-    double midfieldAmbiguityHalfWidth = 1.0;
+    double turnSpeed = 0.35;
     int stableRequired = 3;
     brain->get_parameter("recovery.relocalize_settle_msecs", settleMsecs);
     brain->get_parameter("recovery.relocalize_attempt_interval_msecs", attemptIntervalMsecs);
@@ -5371,8 +5389,7 @@ NodeStatus RecoverLocalizationAfterFall::step()
     brain->get_parameter("recovery.relocalize_xy_radius", xyRadius);
     brain->get_parameter("recovery.relocalize_position_tolerance", positionTolerance);
     brain->get_parameter("recovery.relocalize_angle_tolerance", angleTolerance);
-    brain->get_parameter(
-        "recovery.midfield_ambiguity_half_width", midfieldAmbiguityHalfWidth);
+    brain->get_parameter("recovery.relocalize_turn_speed", turnSpeed);
     brain->get_parameter("recovery.relocalize_stable_count", stableRequired);
     settleMsecs = std::clamp(settleMsecs, 200.0, 3000.0);
     attemptIntervalMsecs = std::clamp(attemptIntervalMsecs, 200.0, 2000.0);
@@ -5380,24 +5397,8 @@ NodeStatus RecoverLocalizationAfterFall::step()
     xyRadius = std::clamp(xyRadius, 0.5, 2.5);
     positionTolerance = std::clamp(positionTolerance, 0.1, 1.0);
     angleTolerance = std::clamp(angleTolerance, 0.1, M_PI / 2.0);
-    midfieldAmbiguityHalfWidth = std::clamp(midfieldAmbiguityHalfWidth, 0.2, 3.0);
+    turnSpeed = std::clamp(fabs(turnSpeed), 0.15, 0.6);
     stableRequired = std::clamp(stableRequired, 2, 6);
-
-    // 半场歧义由中线 x=0 引起，与是否位于中圈圆内无关。这里使用贯穿
-    // 整个场宽的带状区域；只要倒地前 |x| 足够小，起身后就不自动放行。
-    if (fabs(priorPose_.x) <= midfieldAmbiguityHalfWidth) {
-        brain->tree->setEntry<bool>("odom_calibrated", false);
-        brain->client->moveHead(0.35, 0.0);
-        if (phase_ != Phase::MIDFIELD_AMBIGUITY_HOLD) {
-            brain->log->log("recovery/localization", rerun::TextLog(format(
-                "Pre-fall pose (%.2f, %.2f) is inside midfield ambiguity band |x|<=%.2fm; "
-                "holding still for manual localization",
-                priorPose_.x, priorPose_.y, midfieldAmbiguityHalfWidth)));
-            brain->speak("Midfield ambiguity. Manual localization required");
-        }
-        phase_ = Phase::MIDFIELD_AMBIGUITY_HOLD;
-        return NodeStatus::RUNNING;
-    }
 
     if (phase_ == Phase::WAIT_UPRIGHT) {
         phase_ = Phase::SETTLING;
@@ -5417,12 +5418,14 @@ NodeStatus RecoverLocalizationAfterFall::step()
         phaseStart_ = now;
     }
 
-    // 身体保持不动，仅用头部覆盖左右视野；角度搜索不信任倒地前朝向。
+    // 起身后不能原地僵住：头部覆盖左右视野，同时低速旋转身体扫完整个场地。
+    // 定位器仍只信任倒地前位置附近，但不信任倒地后的朝向。
     static constexpr double scanYaw[] = {-1.15, -0.65, 0.0, 0.65, 1.15, 0.65, 0.0, -0.65};
     const auto scanIndex = static_cast<std::size_t>(
         static_cast<long long>(brain->msecsSince(phaseStart_) / 450.0) %
         static_cast<long long>(sizeof(scanYaw) / sizeof(scanYaw[0])));
     brain->client->moveHead(0.35, scanYaw[scanIndex]);
+    brain->client->setVelocity(0.0, 0.0, turnSpeed);
 
     if (hasLastAttempt_ && brain->msecsSince(lastAttemptTime_) < attemptIntervalMsecs)
         return NodeStatus::RUNNING;
@@ -5481,6 +5484,7 @@ NodeStatus RecoverLocalizationAfterFall::step()
         hasLastCandidate_ = true;
 
         if (stableCount_ >= stableRequired) {
+            brain->client->setVelocity(0.0, 0.0, 0.0);
             brain->calibrateOdom(result.pose.x, result.pose.y, result.pose.theta, true);
             brain->tree->setEntry<bool>("odom_calibrated", true);
             brain->data->lastSuccessfulLocalizeTime = now;
