@@ -29,10 +29,14 @@ bool normalFieldPlayerOwnershipPhase(Brain *brain)
 {
     const string role = brain->tree->getEntry<string>("player_role");
     const string subState = brain->tree->getEntry<string>("gc_real_game_sub_state");
+    const bool ownKickoffNormal =
+        brain->data->isKickingOff &&
+        brain->tree->getEntry<bool>("setplay_pair_ready");
     return (role == "striker" || role == "supporter") &&
         brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
-        (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
-         !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
+        ((!brain->tree->getEntry<bool>("gc_kickoff_active") ||
+          !brain->tree->getEntry<bool>("setplay_pair_ready")) ||
+         ownKickoffNormal) &&
         !brain->tree->getEntry<bool>("setplay_attack_active") &&
         (subState == "NONE" || subState == "OVERTIME");
 }
@@ -2055,12 +2059,12 @@ NodeStatus CalcKickDir::tick()
         color = 0xFF00FFFF;
     }
     else if (brain->data->isKickingOff &&
-             brain->tree->getEntry<bool>("setplay_pair_ready")) {
-        // 我方中圈开球由 1 号按正常 attacker 流程绕球、追球和调整，
-        // 本阶段固定反向传向己方球门中心，并最终调用 VisualKick。
+             brain->tree->getEntry<bool>("setplay_pair_ready") &&
+             brain->config->playerId == 1) {
+        // 我方开球 PLAY 内，1号仍走 NORMAL 的 attacker/support 决策；
+        // 只有踢球方向被覆盖为严格的场地 -x，VisualKick 力度由配置固定为 3。
         nextKickType = "visual_kick";
-        nextKickDir = kick_geometry::directionToTarget(
-            bPos.x, bPos.y, -fd.length / 2.0, 0.0, shootDir);
+        nextKickDir = M_PI;
         color = 0xFF00FFFF;
     }
     else if (
@@ -2193,19 +2197,13 @@ NodeStatus StrikerDecide::tick() {
     const int kickoffRank = kickoffGroupRank(brain);
     const bool assignedOpponentHalf = kickoffRank >= 0 && kickoffRank < 2;
     const bool isThreePlayerTeam = brain->config->numOfPlayers == 3;
-    const bool ownKickoffPlayer2Support =
-        brain->data->isKickingOff &&
-        brain->tree->getEntry<bool>("setplay_pair_ready") &&
-        brain->config->playerId == 2;
-    const bool kickoffAttack = kickoffPhase &&
-        (brain->data->isKickingOff
-            ? brain->config->playerId == 1
-            : (isThreePlayerTeam
-                ? kickoffRank == 0
-                : assignedOpponentHalf == ballInOpponentHalf));
-    const bool kickoffHold = kickoffPhase && !kickoffAttack && !ownKickoffPlayer2Support;
-    // NORMAL 只认统一选举结果；开球则直接认锁存的主罚分工，不能再被
-    // 进入 PLAY 瞬间的实时成本排名挡在 VisualKick 之外。
+    const bool kickoffAttack = kickoffPhase && !brain->data->isKickingOff &&
+        (isThreePlayerTeam
+            ? kickoffRank == 0
+            : assignedOpponentHalf == ballInOpponentHalf);
+    // 我方开球时1、2号都直接复用 NORMAL；对方开球的原有待命分工不变。
+    const bool kickoffHold = kickoffPhase && !kickoffAttack && !normalOwnerPhase;
+    // NORMAL（包括我方开球）只认统一选举结果；对方开球仍使用原有分工。
     const bool visualKickOwner = keeperRole || setPlayAttackActive || kickoffAttack ||
         (brain->data->tmImLead &&
          (normalOwnerPhase || brain->data->tmMyCostRank == 0));
@@ -2230,17 +2228,6 @@ NodeStatus StrikerDecide::tick() {
         brain->log->logToScreen(
             "tree/value_threat", "Threat Level: unavailable, Kick Value: unavailable",
             0xFFFFFFFF, 60);
-        return NodeStatus::SUCCESS;
-    }
-
-    if (ownKickoffPlayer2Support) {
-        // 我方双人开球时，2号不再原地静止；有球位后立即按接应逻辑移动。
-        brain->data->tmImInVisualKick = false;
-        hasLastDeltaDir = false;
-        setOutput("decision_out", string("assist"));
-        log("own kickoff: player 2 active support");
-        brain->log->logToScreen(
-            "tree/Decide", "Decision: assist (own kickoff player 2)", 0x00FFFFFF);
         return NodeStatus::SUCCESS;
     }
 
@@ -5078,7 +5065,9 @@ NodeStatus GoToReadyPosition::tick()
         vyLimit = 0.4;
     }
     double vthetaLimit = 1.5;
-    bool avoidObstacle = true;
+    // READY 站位时所有球员都走直接路线，不启用策略层的足球/队友避障。
+    // 该开关仅作用于本 READY 导航节点，不影响 PLAY 等其他阶段。
+    bool avoidObstacle = false;
 
     if (_lastGameState != gameState && gameState == "READY") {
         _positionLocked = false;
@@ -5116,9 +5105,9 @@ NodeStatus GoToReadyPosition::tick()
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            // 我方开球 READY：2号站在 (-1, -2)，面向对方球门（场地 +x）。
-            tx = isKickoff ? -1.0 : -4.5;
-            ty = isKickoff ? -2.0 : -0.5;
+            // 我方开球 READY：2号站在 (-4, -3)，面向对方球门（场地 +x）。
+            tx = isKickoff ? -4.0 : -4.5;
+            ty = isKickoff ? -3.0 : -0.5;
             if (isKickoff) ttheta = 0.0;
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;

@@ -616,7 +616,8 @@ void Brain::pubKickMsg() {
         data->isKickingOff &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
         tree->getEntry<bool>("gc_kickoff_active") &&
-        tree->getEntry<bool>("setplay_pair_ready");
+        tree->getEntry<bool>("setplay_pair_ready") &&
+        config->playerId == 1;
     double goal_x = config->fieldDimensions.length / 2.0;
     double goal_y = 0.0;
     if (ownGoalKickPass || (ownSetPlayPass && !ownCornerKickPass && !ownFreeKickPass)) {
@@ -1082,28 +1083,14 @@ void Brain::handleCooperation() {
         (data->isKickingOff || data->isOpponentKickingOff) &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
         tree->getEntry<bool>("setplay_pair_ready");
-    auto kickoffPlayerAlive = [&](int playerId) {
-        if (playerId < 1 || playerId > numOfPlayers ||
-            playerId > HL_MAX_NUM_PLAYERS) return false;
-        if (playerId == selfId) return data->tmImAlive;
-        return data->tmStatus[playerId - 1].isAlive;
-    };
-    const bool fixedOwnKickoffPlayer1 =
-        kickoffTacticalPhase &&
-        data->isKickingOff &&
-        numOfPlayers == 3 &&
-        kickoffPlayerAlive(1);
     if (!data->isKickingOff && !data->isOpponentKickingOff) {
         data->kickoffStrikerGroupRank = -1;
         data->kickoffStrikerGroupLatched = false;
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 3v3 我方开球且 1 号在线时，固定 1 号主罚；2 号由行为树执行主动接应，
-        // 不允许进入 PLAY 瞬间的 cost 排名改变开球者。1 号缺席时才动态排序。
-        data->kickoffStrikerGroupRank = fixedOwnKickoffPlayer1
-            ? (selfId == 1 ? 0 : (selfId == 2 ? 1 : myStrikerCostRank))
-            : myStrikerCostRank;
+        // 开球 PLAY 内不锁死场上球员分工；1、2号都使用 NORMAL 角色选举。
+        data->kickoffStrikerGroupRank = myStrikerCostRank;
         data->kickoffStrikerGroupLatched = true;
     }
 
@@ -1118,10 +1105,13 @@ void Brain::handleCooperation() {
     const string selfRole = tree->getEntry<string>("player_role");
     const string gameStateForOwner = tree->getEntry<string>("gc_game_state");
     const string realSubStateForOwner = tree->getEntry<string>("gc_real_game_sub_state");
+    const bool ownKickoffNormalOwnerPhase =
+        data->isKickingOff && tree->getEntry<bool>("setplay_pair_ready");
     const bool normalOwnerPhase =
         gameStateForOwner == "PLAY" &&
-        (!tree->getEntry<bool>("gc_kickoff_active") ||
-         !tree->getEntry<bool>("setplay_pair_ready")) &&
+        ((!tree->getEntry<bool>("gc_kickoff_active") ||
+          !tree->getEntry<bool>("setplay_pair_ready")) ||
+         ownKickoffNormalOwnerPhase) &&
         (realSubStateForOwner == "NONE" || realSubStateForOwner == "OVERTIME");
     auto makeCandidate = [&](int id, const Pose2D &pose, const Point &ballPos,
                              bool seesBall, bool fallen, double fallbackCost) {
@@ -1265,10 +1255,6 @@ void Brain::handleCooperation() {
         normalAttackerId = 0;
         normalAttackerLastConfirmedTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
-    // 我方开球期间，球权也必须与固定分工一致。否则即使 1 号的
-    // kickoff rank 为 0，瞬时距离排名仍可能阻止它进入 VisualKick。
-    if (fixedOwnKickoffPlayer1) ownerId = 1;
-
     data->tmImLead = data->tmImAlive && ownerId == selfId;
     tree->setEntry<bool>("is_lead", data->tmImLead);
     log_(format("ball owner: %d, myCost: %.1f, myCostRank: %d, myStrikerCostRank: %d, kickoffGroupRank: %d, myStrikerIDRank: %d",
