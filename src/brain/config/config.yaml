@@ -20,7 +20,7 @@ brain_node:
       odom_factor: 1.0 
       vx_factor: 0.90 
       yaw_offset: 0.0 
-      vx_limit: 1.8
+      vx_limit: 2.0
       vy_limit: 0.8
       vtheta_limit: 1.5 
 
