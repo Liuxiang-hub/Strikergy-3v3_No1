@@ -5104,8 +5104,8 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 我方开球 READY：1号站在 (-1, 0)，面向中点处的足球。
-                tx = -1.0;
+                // 我方开球 READY：1号站在 (1, 0)，面向中点处的足球。
+                tx = 1.0;
                 ty = 0.0;
                 ttheta = std::atan2(-ty, -tx);
             } else {
@@ -5234,7 +5234,8 @@ NodeStatus CheckAndStandUp::tick()
     brain->log->log("recovery", rerun::TextLog(format("Recovery retry count: %d, recoveryPerformed: %d recoveryState: %d currentRobotModeIndex: %d", brain->data->recoveryPerformedRetryCount, brain->data->recoveryPerformed, brain->data->recoveryState, brain->data->currentRobotModeIndex)));
 
     const int retryMaxCount = std::max(
-        1, brain->get_parameter("recovery.retry_max_count").get_value<int>());
+        1, static_cast<int>(
+            brain->get_parameter("recovery.retry_max_count").get_value<int>()));
     double retryCommandTimeoutMsecs = 8000.0;
     brain->get_parameter("recovery.retry_command_timeout_msecs", retryCommandTimeoutMsecs);
     retryCommandTimeoutMsecs = std::clamp(retryCommandTimeoutMsecs, 3000.0, 20000.0);
