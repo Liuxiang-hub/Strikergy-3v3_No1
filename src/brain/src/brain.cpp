@@ -615,7 +615,8 @@ void Brain::pubKickMsg() {
     const bool ownKickoffPass =
         data->isKickingOff &&
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
-        tree->getEntry<bool>("gc_kickoff_active");
+        tree->getEntry<bool>("gc_kickoff_active") &&
+        tree->getEntry<bool>("setplay_pair_ready");
     double goal_x = config->fieldDimensions.length / 2.0;
     double goal_y = 0.0;
     if (ownGoalKickPass || (ownSetPlayPass && !ownCornerKickPass && !ownFreeKickPass)) {
@@ -644,7 +645,8 @@ void Brain::pubKickMsg() {
     const string gameState = tree->getEntry<string>("gc_game_state");
     const bool normalContest =
         gameState == "PLAY" &&
-        !tree->getEntry<bool>("gc_kickoff_active") &&
+        (!tree->getEntry<bool>("gc_kickoff_active") ||
+         !tree->getEntry<bool>("setplay_pair_ready")) &&
         (realGameSubState == "NONE" || realGameSubState == "OVERTIME");
 
     if (goalieVisualKick) {
@@ -1050,7 +1052,8 @@ void Brain::handleCooperation() {
 
     const bool kickoffTacticalPhase =
         (data->isKickingOff || data->isOpponentKickingOff) &&
-        tree->getEntry<string>("gc_game_state") == "PLAY";
+        tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        tree->getEntry<bool>("setplay_pair_ready");
     auto kickoffPlayerAlive = [&](int playerId) {
         if (playerId < 1 || playerId > numOfPlayers ||
             playerId > HL_MAX_NUM_PLAYERS) return false;
@@ -1089,7 +1092,8 @@ void Brain::handleCooperation() {
     const string realSubStateForOwner = tree->getEntry<string>("gc_real_game_sub_state");
     const bool normalOwnerPhase =
         gameStateForOwner == "PLAY" &&
-        !tree->getEntry<bool>("gc_kickoff_active") &&
+        (!tree->getEntry<bool>("gc_kickoff_active") ||
+         !tree->getEntry<bool>("setplay_pair_ready")) &&
         (realSubStateForOwner == "NONE" || realSubStateForOwner == "OVERTIME");
     auto makeCandidate = [&](int id, const Pose2D &pose, const Point &ballPos,
                              bool seesBall, bool fallen, double fallbackCost) {

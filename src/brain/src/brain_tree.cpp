@@ -31,7 +31,8 @@ bool normalFieldPlayerOwnershipPhase(Brain *brain)
     const string subState = brain->tree->getEntry<string>("gc_real_game_sub_state");
     return (role == "striker" || role == "supporter") &&
         brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
-        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
+         !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
         !brain->tree->getEntry<bool>("setplay_attack_active") &&
         (subState == "NONE" || subState == "OVERTIME");
 }
@@ -125,6 +126,7 @@ bool kickoffTacticalPhase(Brain *brain)
 {
     return (brain->data->isKickingOff || brain->data->isOpponentKickingOff) &&
         brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
+        brain->tree->getEntry<bool>("setplay_pair_ready") &&
         (brain->tree->getEntry<string>("player_role") == "striker" ||
          brain->tree->getEntry<string>("player_role") == "supporter");
 }
@@ -2063,7 +2065,8 @@ NodeStatus CalcKickDir::tick()
             bPos.x, bPos.y, setPlayTargetX, 0.0, shootDir);
         color = 0xFF00FFFF;
     }
-    else if (brain->data->isKickingOff) {
+    else if (brain->data->isKickingOff &&
+             brain->tree->getEntry<bool>("setplay_pair_ready")) {
         // 我方中圈开球由 1 号按正常 attacker 流程绕球、追球和调整，
         // 但本阶段固定反向传向己方球门中心。
         nextKickType = "visual_kick";
@@ -2117,7 +2120,8 @@ NodeStatus CalcKickDir::tick()
     // 定位球不使用此特例，继续保持各自的瞄准方向。
     const bool normalContest =
         brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
-        !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+        (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
+         !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
         (brain->data->realGameSubState == "NONE" ||
          brain->data->realGameSubState == "OVERTIME");
     const double centerCircleForwardAimRadius = fd.circleRadius + 2.0;
@@ -2201,7 +2205,9 @@ NodeStatus StrikerDecide::tick() {
     const bool assignedOpponentHalf = kickoffRank >= 0 && kickoffRank < 2;
     const bool isThreePlayerTeam = brain->config->numOfPlayers == 3;
     const bool ownKickoffPlayer2Hold =
-        brain->data->isKickingOff && brain->config->playerId == 2;
+        brain->data->isKickingOff &&
+        brain->tree->getEntry<bool>("setplay_pair_ready") &&
+        brain->config->playerId == 2;
     const bool kickoffAttack = kickoffPhase &&
         (brain->data->isKickingOff
             ? brain->config->playerId == 1
@@ -2782,7 +2788,9 @@ NodeStatus Kick::onStart()
         brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
         if (
             softKickoff
-            && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
+            && (brain->data->isFreekickKickingOff ||
+                (brain->data->isKickingOff &&
+                 brain->tree->getEntry<bool>("setplay_pair_ready")))
             && !brain->tree->getEntry<bool>("setplay_powerkick")
             ) speed = softKickoffSpeed;
         brain->client->crabWalk(angle, speed);
@@ -2851,7 +2859,9 @@ NodeStatus Kick::onRunning()
             brain->get_parameter("strategy.soft_kickoff_speed", softKickoffSpeed);
             if (
                 softKickoff
-                && (brain->data->isFreekickKickingOff || brain->data->isKickingOff)
+                && (brain->data->isFreekickKickingOff ||
+                    (brain->data->isKickingOff &&
+                     brain->tree->getEntry<bool>("setplay_pair_ready")))
                 && !brain->tree->getEntry<bool>("setplay_powerkick")
                 ) speed = softKickoffSpeed;
                 brain->client->crabWalk(angle, speed);
@@ -3017,7 +3027,8 @@ NodeStatus RLVisionKick::onRunning()
                     brain->tree->getEntry<bool>("setplay_attack_active");
                 const bool normalContest =
                     brain->tree->getEntry<string>("gc_game_state") == "PLAY" &&
-                    !brain->tree->getEntry<bool>("gc_kickoff_active") &&
+                    (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
+                     !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
                     (brain->data->realGameSubState == "NONE" ||
                      brain->data->realGameSubState == "OVERTIME") &&
                     !goalieKick;
