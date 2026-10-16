@@ -689,6 +689,7 @@ void Brain::handleSpecialStates() {
         if (isKickoffSide) {
             // 新一轮我方开球开始时清除任何尚未消费的旧触发。
             tree->setEntry<bool>("goalie_post_own_kickoff_trigger", false);
+            tree->setEntry<bool>("field_post_own_kickoff_trigger", false);
             data->isKickingOff = true;
             data->kickoffStartTime = now;
             data->isOpponentKickingOff = false;
@@ -726,8 +727,9 @@ void Brain::handleSpecialStates() {
     if (ownKickoffWasActive && !data->isKickingOff &&
         gameState == "PLAY" && normalKickoffState) {
         // 可靠记录“上一状态为我方开球、当前进入正常拼抢”的单次边沿。
-        // 守门员 Analyze2 消费后会立即清除此触发。
+        // 守门员和场上球员各自消费独立触发，分别启动同一轮10秒窗口。
         tree->setEntry<bool>("goalie_post_own_kickoff_trigger", true);
+        tree->setEntry<bool>("field_post_own_kickoff_trigger", true);
     }
 
     if (gameState == "PLAY" && gameSubStateType == "FREE_KICK"

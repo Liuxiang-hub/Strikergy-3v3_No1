@@ -221,6 +221,7 @@ void BrainTree::init()
     REGISTER_BUILDER(MoveToBallSearchPosition)
     REGISTER_BUILDER(GoToFreekickPosition)
     REGISTER_BUILDER(GoToReadyPosition)
+    REGISTER_BUILDER(PostOwnKickoffPosition)
     REGISTER_BUILDER(GoToGoalBlockingPosition)
     REGISTER_BUILDER(TurnOnSpot)
     REGISTER_BUILDER(MoveToPoseOnField)
@@ -291,6 +292,7 @@ void BrainTree::initEntry()
     setEntry<bool>("goalie_clearance_latched", false);
     setEntry<bool>("goalie_post_own_kickoff_trigger", false);
     setEntry<bool>("goalie_post_own_kickoff_clearance", false);
+    setEntry<bool>("field_post_own_kickoff_trigger", false);
     setEntry<bool>("penalty_kick_active", false);
     setEntry<bool>("penalty_kick_defending", false);
     setEntry<double>("penalty_kick_goalie_dist_to_goalline", 0.05);
@@ -2254,6 +2256,41 @@ NodeStatus StrikerDecide::tick() {
         log("own kickoff: player 1 holds still");
         brain->log->logToScreen(
             "tree/Decide", "Decision: kickoff_still (player 1)", 0x00AAFFFF);
+        return NodeStatus::SUCCESS;
+    }
+
+    const bool postOwnKickoffTrigger =
+        brain->tree->getEntry<bool>("field_post_own_kickoff_trigger");
+    const bool fieldPlayer =
+        brain->config->playerId == 1 || brain->config->playerId == 2;
+    if (normalOwnerPhase && fieldPlayer && postOwnKickoffTrigger) {
+        _postOwnKickoffPositionActive = true;
+        _postOwnKickoffPositionStartTime = brain->get_clock()->now();
+        brain->tree->setEntry<bool>("field_post_own_kickoff_trigger", false);
+        RCLCPP_INFO(
+            brain->get_logger(),
+            "[post_own_kickoff_position] player %d starts 10s positioning window",
+            brain->config->playerId);
+    }
+    if (_postOwnKickoffPositionActive) {
+        const bool expired =
+            brain->msecsSince(_postOwnKickoffPositionStartTime) >= 10000.0;
+        if (!normalOwnerPhase || !fieldPlayer || expired) {
+            _postOwnKickoffPositionActive = false;
+            _postOwnKickoffPositionStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
+            RCLCPP_INFO(
+                brain->get_logger(),
+                "[post_own_kickoff_position] player %d positioning window %s",
+                brain->config->playerId,
+                expired ? "expired" : "cleared after leaving NORMAL");
+        }
+    }
+    if (_postOwnKickoffPositionActive) {
+        brain->data->tmImInVisualKick = false;
+        hasLastDeltaDir = false;
+        setOutput("decision_out", string("post_kickoff_position"));
+        brain->log->logToScreen(
+            "tree/Decide", "Decision: post_kickoff_position", 0x00AAFFFF);
         return NodeStatus::SUCCESS;
     }
 
@@ -5143,6 +5180,27 @@ NodeStatus MoveToPoseOnField::tick()
     return NodeStatus::SUCCESS;
 }
 
+NodeStatus PostOwnKickoffPosition::tick()
+{
+    double vxLimit = 1.2, vyLimit = 0.6, vthetaLimit = 1.5;
+    double positionTolerance = 0.2, thetaTolerance = 0.2;
+    getInput("vx_limit", vxLimit);
+    getInput("vy_limit", vyLimit);
+    getInput("vtheta_limit", vthetaLimit);
+    getInput("position_tolerance", positionTolerance);
+    getInput("theta_tolerance", thetaTolerance);
+
+    const int playerId = brain->config->playerId;
+    const double targetY = playerId == 2 ? 0.5 : 0.0;
+    brain->client->moveToPoseOnField3(
+        0.0, targetY, 0.0,
+        0.8, 0.35,
+        vxLimit, vyLimit, vthetaLimit,
+        positionTolerance, positionTolerance, thetaTolerance,
+        true);
+    return NodeStatus::SUCCESS;
+}
+
 NodeStatus GoToReadyPosition::tick()
 {
     auto log = [=](string msg) {
@@ -5256,8 +5314,8 @@ NodeStatus GoToReadyPosition::tick()
             //ty = - fd.goalAreaWidth / 2.0;
         }
     } else if (role == "keeper") {
-        // 与 PLAY 阶段 GoalieIdleHome 一致，固定站在己方门线前 0.5m。
-        tx = -fd.length / 2.0 + 0.5;
+        // 与 PLAY 阶段 GoalieIdleHome 一致，固定站在己方门线前 1.5m。
+        tx = -fd.length / 2.0 + 1.5;
         ty = 0;
         ttheta = 0;
     }

@@ -90,6 +90,9 @@ private:
     double lastDeltaDir = 0.0;
     bool hasLastDeltaDir = false;
     rclcpp::Time timeLastTick;
+    // 我方开球转入 NORMAL 后，1、2号先执行10秒中场展开站位。
+    bool _postOwnKickoffPositionActive = false;
+    rclcpp::Time _postOwnKickoffPositionStartTime;
 };
 
 class NewDecide : public SyncActionNode
@@ -664,6 +667,26 @@ private:
     double _kickoffReadyRefineStartSec = 0.0;
     int _kickoffReadyStableTicks = 0;
     std::string _lastGameState;
+};
+
+// 我方开球结束后的10秒展开站位：1号去(0,0)，2号去(0,0.5)，均面向对方球门。
+class PostOwnKickoffPosition : public SyncActionNode
+{
+public:
+    PostOwnKickoffPosition(const std::string &name, const NodeConfig &config, Brain *_brain)
+        : SyncActionNode(name, config), brain(_brain) {}
+    static BT::PortsList providedPorts() {
+        return {
+            InputPort<double>("vx_limit", 1.2, ""),
+            InputPort<double>("vy_limit", 0.6, ""),
+            InputPort<double>("vtheta_limit", 1.5, ""),
+            InputPort<double>("position_tolerance", 0.2, ""),
+            InputPort<double>("theta_tolerance", 0.2, ""),
+        };
+    }
+    BT::NodeStatus tick() override;
+private:
+    Brain *brain;
 };
 
 class GoToGoalBlockingPosition : public SyncActionNode

@@ -39,6 +39,9 @@
                   <Sequence>
                         <!-- 比赛中丢球时统一执行：快扫、转满一周、分区导航、到位继续旋转。 -->
                         <SubTree ID="FindBall" _while="decision == 'find'" _autoremap="true" />
+                        <PostOwnKickoffPosition _while="decision == 'post_kickoff_position'"
+                           vx_limit="1.2" vy_limit="0.6" vtheta_limit="1.5"
+                           position_tolerance="0.2" theta_tolerance="0.2" />
                         <KickoffStand _while="decision == 'kickoff_hold'" dist_tolerance="0.5" theta_tolerance="0.2" vx_limit="0.6" vy_limit="0.5" hold_vtheta_limit="0.6" />
                         <SetVelocity _while="decision == 'kickoff_still'" />
                         <Assist _while="decision == 'assist'" vx_limit = "1.2" vy_limit="0.6" />
