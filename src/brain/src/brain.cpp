@@ -1223,8 +1223,8 @@ void Brain::handleCooperation() {
                 ownerId = normalAttackerId;
             }
         }
-        // 1、2号都在场的我方开球：1号按战术要求保持静止，因此必须同步
-        // 锁定2号为球权拥有者，避免1号被选成 attacker 后无人踢球。
+        // 2、3号都在场的我方开球：按战术要求固定由2号主罚，因此必须同步
+        // 锁定2号为球权拥有者，避免正常选举结果覆盖开球分工。
         if (ownKickoffNormalOwnerPhase) {
             ownerId = 2;
         }

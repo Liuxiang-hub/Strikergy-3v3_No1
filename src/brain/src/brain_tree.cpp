@@ -336,7 +336,11 @@ void BrainTree::tick()
         if (playerId == brain->config->playerId) return brain->data->tmImAlive;
         return brain->data->tmStatus[playerId - 1].isAlive;
     };
+    // Other set plays still use the two field players (1 and 2).  Our normal
+    // kickoff now requires the designated kicker (2) and goalkeeper (3).
     const bool livePairReady = isPlayerAlive(1) && isPlayerAlive(2);
+    const bool liveOwnKickoffPairReady =
+        isPlayerAlive(2) && isPlayerAlive(3);
     const string gameState = getEntry<string>("gc_game_state");
     const bool ownKickoffPairLatchScope =
         brain->data->isKickingOff &&
@@ -345,16 +349,16 @@ void BrainTree::tick()
     if (ownKickoffPairLatchScope && !_ownKickoffPairLatchValid) {
         // 正常流程在 SET 首帧锁存；如果进程在 SET 末尾启动，则首次 PLAY
         // 仍可补锁一次。此后整个开球阶段不再随通信瞬断而改变战术。
-        _ownKickoffPairReadyLatched = livePairReady;
+        _ownKickoffPairReadyLatched = liveOwnKickoffPairReady;
         _ownKickoffPairLatchValid = true;
         RCLCPP_INFO(
             brain->get_logger(),
-            "[kickoff_pair_latch] 1/2 ready=%d, game_state=%s; hold until kickoff ends",
+            "[kickoff_pair_latch] 2/3 ready=%d, game_state=%s; hold until kickoff ends",
             _ownKickoffPairReadyLatched ? 1 : 0, gameState.c_str());
     } else if (!ownKickoffPairLatchScope && _ownKickoffPairLatchValid) {
         RCLCPP_INFO(
             brain->get_logger(),
-            "[kickoff_pair_latch] kickoff ended; clear latched 1/2 readiness");
+            "[kickoff_pair_latch] kickoff ended; clear latched 2/3 readiness");
         _ownKickoffPairLatchValid = false;
         _ownKickoffPairReadyLatched = false;
     }
