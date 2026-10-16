@@ -3,29 +3,29 @@ camera:
   camera_info_topic: /boostercamera/head/rgb/camera_info
   intrin_wait_timeout_sec: 3.0
   intrin:
-    fx: 202.572113
-    fy: 202.572113
-    cx: 262.075775
-    cy: 213.058319
+    fx: 209.080017
+    fy: 209.080017
+    cx: 254.654602
+    cy: 208.045242
     distortion_model: 0
     distortion_coeffs:
       []
   extrin:
     -
-      - 0.00952674448
-      - -0.00697467243
-      - 0.999930263
-      - 0.00510478579
+      - 0.0272985213
+      - 0.00202133157
+      - 0.999625325
+      - -0.00161289994
     -
-      - -0.999953747
-      - 0.00125687942
-      - 0.0095357364
-      - 0.0311067309
+      - -0.999619484
+      - -0.00391280511
+      - 0.0273062754
+      - 0.0438158363
     -
-      - -0.00132330053
-      - -0.999974847
-      - -0.00696237665
-      - -0.0219331048
+      - 0.00396653404
+      - -0.999990344
+      - 0.00191374857
+      - -0.0154758077
     -
       - 0
       - 0
@@ -59,8 +59,8 @@ use_depth: false
 ball_pose_estimator:
   use_depth: false
   ball_size: 3
-  x_compensation: 0.0
-  y_compensation: 0.0
+  x_compensation: 0.00
+  y_compensation: -0.00
   down_sample_leaf_size: 0.01
   cluster_distance_threshold: 0.01
   fitting_distance_threshold: 0.01
@@ -82,7 +82,7 @@ calibration:
     zero_translation: true
     field_marker_path: ./src/vision/config/field.yaml
   handeye:
-    calibration_time: 2026-09-24-13-32-25
-    reprojection_error: 2.09748845948176
+    calibration_time: 2026-09-24-13-05-01
+    reprojection_error: 1.1580726620877255
 misc:
   save_data_nonstationary: true

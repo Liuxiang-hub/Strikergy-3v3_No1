@@ -2,7 +2,7 @@ brain_node:
   ros__parameters:
     game:
       team_id: 113 # consistant with GameControl
-      player_id: 1 # 1 | 2 | 3
+      player_id: 2 # 1 | 2 | 3
       field_type: "CAA_size" # adult_size | kid_size | CAA_size | robo_league
       player_role: "striker" # striker | supporter | keeper
       player_start_pos: "right" # right | left
