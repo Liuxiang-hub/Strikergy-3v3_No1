@@ -607,7 +607,7 @@ void Brain::pubKickMsg() {
         tree->getEntry<string>("gc_game_state") == "PLAY" &&
         tree->getEntry<bool>("gc_kickoff_active") &&
         tree->getEntry<bool>("setplay_pair_ready") &&
-        config->playerId == 1;
+        config->playerId == 2;
     double goal_x = config->fieldDimensions.length / 2.0;
     double goal_y = 0.0;
     if (ownGoalKickPass || (ownSetPlayPass && !ownCornerKickPass && !ownFreeKickPass)) {
@@ -1062,7 +1062,7 @@ void Brain::handleCooperation() {
         data->kickoffBallHalf = 0;
     } else if (kickoffTacticalPhase && selfIsStriker
         && !data->kickoffStrikerGroupLatched) {
-        // 对方开球沿用分组；我方开球时2号会静止，1号在球权选举处锁为主罚者。
+        // 对方开球沿用分组；我方开球时1号会静止，2号在球权选举处锁为主罚者。
         data->kickoffStrikerGroupRank = myStrikerCostRank;
         data->kickoffStrikerGroupLatched = true;
     }
@@ -1223,10 +1223,10 @@ void Brain::handleCooperation() {
                 ownerId = normalAttackerId;
             }
         }
-        // 1、2号都在场的我方开球：2号按战术要求保持静止，因此必须同步
-        // 锁定1号为球权拥有者，避免2号被选成 attacker 后无人踢球。
+        // 1、2号都在场的我方开球：1号按战术要求保持静止，因此必须同步
+        // 锁定2号为球权拥有者，避免1号被选成 attacker 后无人踢球。
         if (ownKickoffNormalOwnerPhase) {
-            ownerId = 1;
+            ownerId = 2;
         }
         normalAttackerId = ownerId;
     } else {

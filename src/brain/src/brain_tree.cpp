@@ -2088,8 +2088,8 @@ NodeStatus CalcKickDir::tick()
     }
     else if (brain->data->isKickingOff &&
              brain->tree->getEntry<bool>("setplay_pair_ready") &&
-             brain->config->playerId == 1) {
-        // 我方开球 PLAY 内，1号仍走 NORMAL 的 attacker/support 决策；
+             brain->config->playerId == 2) {
+        // 我方开球 PLAY 内，2号仍走 NORMAL 的 attacker/support 决策；
         // 只有踢球方向被覆盖为严格的场地 -x，VisualKick 力度由配置固定为 3。
         nextKickType = "visual_kick";
         nextKickDir = M_PI;
@@ -2229,7 +2229,7 @@ NodeStatus StrikerDecide::tick() {
         (isThreePlayerTeam
             ? kickoffRank == 0
             : assignedOpponentHalf == ballInOpponentHalf);
-    // 我方开球时1号复用 NORMAL，2号由下面的 kickoff_still 分支持续静止；
+    // 我方开球时2号复用 NORMAL，1号由下面的 kickoff_still 分支持续静止；
     // 对方开球的原有待命分工不变。
     const bool kickoffHold = kickoffPhase && !kickoffAttack && !normalOwnerPhase;
     // NORMAL（包括我方开球）只认统一选举结果；对方开球仍使用原有分工。
@@ -2237,19 +2237,19 @@ NodeStatus StrikerDecide::tick() {
         (brain->data->tmImLead &&
          (normalOwnerPhase || brain->data->tmMyCostRank == 0));
 
-    const bool ownKickoffPlayer2Still =
+    const bool ownKickoffPlayer1Still =
         kickoffPhase && brain->data->isKickingOff &&
-        brain->config->playerId == 2;
-    if (ownKickoffPlayer2Still) {
-        // 2号在我方开球 PLAY 有效期内不参与找球、接应或抢球；每帧明确
+        brain->config->playerId == 1;
+    if (ownKickoffPlayer1Still) {
+        // 1号在我方开球 PLAY 有效期内不参与找球、接应或抢球；每帧明确
         // 下发零速度，避免上一个 READY/导航动作的残余速度继续生效。
         brain->data->tmImInVisualKick = false;
         hasLastDeltaDir = false;
         brain->client->setVelocity(0.0, 0.0, 0.0);
         setOutput("decision_out", string("kickoff_still"));
-        log("own kickoff: player 2 holds still");
+        log("own kickoff: player 1 holds still");
         brain->log->logToScreen(
-            "tree/Decide", "Decision: kickoff_still (player 2)", 0x00AAFFFF);
+            "tree/Decide", "Decision: kickoff_still (player 1)", 0x00AAFFFF);
         return NodeStatus::SUCCESS;
     }
 
@@ -5222,20 +5222,25 @@ NodeStatus GoToReadyPosition::tick()
         }
         if (strikerRank == 0) {
             if (isKickoff) {
-                // 球尚未放置时不能以球定位。先到中圈内的保守点，再用中线和
-                // 两个中圈 XCross 做局部精定位；0.45m 粗目标留出充分犯规余量。
-                tx = 0.45;
-                ty = 0.0;
-                ttheta = std::atan2(-ty, -tx);
+                // 我方开球 READY：1号改为原2号的等待站位，面向对方球门。
+                tx = -1.0;
+                ty = -3.5;
+                ttheta = 0.0;
             } else {
                 tx = -2.3;
                 ty = 0.0;
             }
         } else if (strikerRank == 1) {
-            // 我方开球 READY：2号站在 (-1.0, -3.5)，面向对方球门（场地 +x）。
-            tx = isKickoff ? -1.0 : -4.5;
-            ty = isKickoff ? -3.5 : -0.5;
-            if (isKickoff) ttheta = 0.0;
+            if (isKickoff) {
+                // 2号接替主罚：先到中圈内的保守点，再用中线和两个中圈
+                // XCross 做局部精定位；0.45m 粗目标留出充分犯规余量。
+                tx = 0.45;
+                ty = 0.0;
+                ttheta = std::atan2(-ty, -tx);
+            } else {
+                tx = -4.5;
+                ty = -0.5;
+            }
         } else if (strikerRank == 2) {
             //tx = - fd.length / 2.0 + fd.penaltyDist;
             //ty = fd.goalAreaWidth / 2.0;
@@ -5303,15 +5308,15 @@ NodeStatus GoToReadyPosition::tick()
         _readyPoseSampleValid = true;
     }
 
-    // 1号我方开球 READY：以“中线 + 中圈两端 XCross”做一次短时局部精定位。
+    // 2号我方开球 READY：以“中线 + 中圈两端 XCross”做一次短时局部精定位。
     // 这段控制完全在里程计坐标系内收口，成功后不再受场地定位慢漂影响。
-    const bool playerOneKickoffPlacement =
-        gameState == "READY" && isKickoff && brain->config->playerId == 1 &&
+    const bool kickoffKickerPlacement =
+        gameState == "READY" && isKickoff && brain->config->playerId == 2 &&
         (role == "striker" || role == "supporter");
 
     // 精定位完成后只看里程计，场地定位的慢漂不会触发重新走位。若机器人
     // 确实被推离，再清空局部观测并重新执行一次短扫描。
-    if (playerOneKickoffPlacement && _kickoffReadyRefineDone &&
+    if (kickoffKickerPlacement && _kickoffReadyRefineDone &&
         _positionLocked && _lockedOdomValid) {
         const double odomDistance = norm(
             odomPose.x - _lockedOdomPose.x,
@@ -5336,7 +5341,7 @@ NodeStatus GoToReadyPosition::tick()
         return NodeStatus::SUCCESS;
     }
 
-    if (playerOneKickoffPlacement && !_kickoffReadyRefineDone) {
+    if (kickoffKickerPlacement && !_kickoffReadyRefineDone) {
         constexpr double COARSE_DIST_TOLERANCE = 0.25;
         constexpr double COARSE_THETA_TOLERANCE = 0.30;
         constexpr double DESIRED_CENTER_DISTANCE = 0.55;

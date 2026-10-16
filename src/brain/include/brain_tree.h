@@ -648,7 +648,7 @@ private:
     Pose2D _lastReadyOdomPose = {0.0, 0.0, 0.0};
     bool _readyPoseGuardActive = false;
     int _readyPoseStableTicks = 0;
-    // 1号我方开球 READY 的局部精定位：短时扫描中线与中圈的两个 XCross，
+    // 2号我方开球 READY 的局部精定位：短时扫描中线与中圈的两个 XCross，
     // 在里程计坐标系中生成一次性目标，避免后续场地定位慢漂把机器人带出中圈。
     bool _kickoffReadyRefineActive = false;
     bool _kickoffReadyTargetValid = false;
