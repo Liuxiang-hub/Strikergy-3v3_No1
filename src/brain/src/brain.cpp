@@ -726,10 +726,20 @@ void Brain::handleSpecialStates() {
             (data->isKickingOff || data->isOpponentKickingOff));
     if (ownKickoffWasActive && !data->isKickingOff &&
         gameState == "PLAY" && normalKickoffState) {
-        // 可靠记录“上一状态为我方开球、当前进入正常拼抢”的单次边沿。
-        // 守门员和场上球员各自消费独立触发，分别启动同一轮10秒窗口。
-        tree->setEntry<bool>("goalie_post_own_kickoff_trigger", true);
-        tree->setEntry<bool>("field_post_own_kickoff_trigger", true);
+        // 只有本轮完整执行了2号主罚、3号守门的配合开球，BallFree 后才
+        // 启动10秒站位/扩大解围。人员不齐或READY精定位失败导致的退化
+        // 开球不触发本机制；下一轮开球会在 SET/PLAY 入口重新独立判断。
+        const bool coordinatedKickoffCompleted =
+            tree->getEntry<bool>("setplay_pair_ready");
+        tree->setEntry<bool>(
+            "goalie_post_own_kickoff_trigger", coordinatedKickoffCompleted);
+        tree->setEntry<bool>(
+            "field_post_own_kickoff_trigger", coordinatedKickoffCompleted);
+        RCLCPP_INFO(
+            get_logger(),
+            "[post_own_kickoff] coordinated=%d, 10s follow-up=%s",
+            coordinatedKickoffCompleted ? 1 : 0,
+            coordinatedKickoffCompleted ? "enabled" : "skipped after degradation");
     }
 
     if (gameState == "PLAY" && gameSubStateType == "FREE_KICK"
