@@ -5314,8 +5314,8 @@ NodeStatus GoToReadyPosition::tick()
             //ty = - fd.goalAreaWidth / 2.0;
         }
     } else if (role == "keeper") {
-        // 与 PLAY 阶段 GoalieIdleHome 一致，固定站在己方门线前 1.5m。
-        tx = -fd.length / 2.0 + 1.5;
+        // 与 PLAY 阶段 GoalieIdleHome 一致，固定站在己方门线前 1.0m。
+        tx = -fd.length / 2.0 + 1.0;
         ty = 0;
         ttheta = 0;
     }

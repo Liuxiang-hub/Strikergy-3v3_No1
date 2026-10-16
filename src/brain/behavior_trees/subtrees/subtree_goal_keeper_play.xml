@@ -30,11 +30,11 @@
                      <RLVisionKick min_msec_kick="1500" max_msec_kick="7000" range="3.5" />
                   </ReactiveSequence>
                   <ReactiveSequence _while="goalie_mode == 'guard_idle'">
-                     <GoalieIdleHome dist_to_goalline="1.5" vx_limit="0.7" vy_limit="0.5"
+                     <GoalieIdleHome dist_to_goalline="1.0" vx_limit="0.7" vy_limit="0.5"
                         pos_tolerance="0.45" theta_tolerance="0.40" />
                   </ReactiveSequence>
                   <ReactiveSequence _while="goalie_mode == 'guard_defend'">
-                     <Intercept2 dist_to_goalline="1.5" />
+                     <Intercept2 dist_to_goalline="1.0" />
                   </ReactiveSequence>
                </Sequence>
             </ReactiveSequence>
