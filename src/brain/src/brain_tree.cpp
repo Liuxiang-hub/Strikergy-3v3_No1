@@ -23,9 +23,6 @@ constexpr int kVisionKickBadPoseMaxTicks = 3;
 constexpr double kVisionKickHeadScanPitch = 0.4;
 constexpr double kVisionKickHeadDownPitch = 0.7;
 constexpr double kVisionKickHeadCommandIntervalMs = 100.0;
-// 2号在我方开球 READY 局部精定位失败后，通过现有队友通信 cmd 字段
-// 持续广播本轮开球必须退化。该值避开已有的 10~19 守门交接和 100 抢球命令。
-constexpr int kKickoffReadyRefineFailedCmd = 200;
 
 // 与 handleCooperation 的 NORMAL 选举阶段保持一致；定位球和守门员不受影响。
 bool normalFieldPlayerOwnershipPhase(Brain *brain)
@@ -344,76 +341,33 @@ void BrainTree::tick()
     // Other set plays still use the two field players (1 and 2).  Our normal
     // kickoff now requires the designated kicker (2) and goalkeeper (3).
     const bool livePairReady = isPlayerAlive(1) && isPlayerAlive(2);
-    const bool localKickerRefineFailed =
-        brain->config->playerId == 2 &&
-        brain->data->tmMyCmd == kKickoffReadyRefineFailedCmd;
-    const bool teammateKickerRefineFailed =
-        brain->config->playerId != 2 &&
-        brain->data->tmStatus[1].isAlive &&
-        brain->data->tmStatus[1].cmd == kKickoffReadyRefineFailedCmd;
-    const bool kickoffReadyRefineFailed =
-        localKickerRefineFailed || teammateKickerRefineFailed;
+    const bool liveOwnKickoffPairReady =
+        isPlayerAlive(2) && isPlayerAlive(3);
     const string gameState = getEntry<string>("gc_game_state");
     const bool ownKickoffPairLatchScope =
         brain->data->isKickingOff &&
         (gameState == "SET" || gameState == "PLAY");
 
-    // BallFree、比赛中断或本轮开球结束后立即广播清零，避免失败码残留到
-    // 下一轮 READY；READY 期间不能在这里清除，因为2号仍需把失败送达队友。
-    if (brain->config->playerId == 2 &&
-        brain->data->tmMyCmd == kKickoffReadyRefineFailedCmd &&
-        gameState != "READY" && !ownKickoffPairLatchScope) {
-        brain->data->tmMyCmd = 0;
-        brain->data->tmCmdId += 1;
-        brain->data->tmMyCmdId = brain->data->tmCmdId;
-    }
-
     if (ownKickoffPairLatchScope && !_ownKickoffPairLatchValid) {
-        // 从 SET 开始连续采样5个策略帧；若进程错过 SET，则在 PLAY 补足。
-        // 2、3号分别只要在任意一帧出现过就算在线，不要求同一帧同时出现。
-        constexpr int KICKOFF_PAIR_SAMPLE_FRAMES = 5;
-        _ownKickoffPlayer2Seen = _ownKickoffPlayer2Seen || isPlayerAlive(2);
-        _ownKickoffPlayer3Seen = _ownKickoffPlayer3Seen || isPlayerAlive(3);
-        ++_ownKickoffPairSampleCount;
-
-        if (_ownKickoffPairSampleCount >= KICKOFF_PAIR_SAMPLE_FRAMES) {
-            _ownKickoffPairReadyLatched =
-                _ownKickoffPlayer2Seen && _ownKickoffPlayer3Seen &&
-                !kickoffReadyRefineFailed;
-            _ownKickoffPairLatchValid = true;
-            RCLCPP_INFO(
-                brain->get_logger(),
-                "[kickoff_pair_latch] sampled=%d p2_seen=%d p3_seen=%d refine_failed=%d ready=%d game_state=%s; hold until kickoff ends",
-                _ownKickoffPairSampleCount,
-                _ownKickoffPlayer2Seen ? 1 : 0,
-                _ownKickoffPlayer3Seen ? 1 : 0,
-                kickoffReadyRefineFailed ? 1 : 0,
-                _ownKickoffPairReadyLatched ? 1 : 0,
-                gameState.c_str());
-        }
-    } else if (ownKickoffPairLatchScope && _ownKickoffPairReadyLatched &&
-               kickoffReadyRefineFailed) {
-        // 失败消息可能恰好在 SET 首帧锁存之后才到达。失败只允许把本轮
-        // 从配合开球降级为 NORMAL，绝不允许中途从失败恢复成配合开球。
-        _ownKickoffPairReadyLatched = false;
-        RCLCPP_WARN(
-            brain->get_logger(),
-            "[kickoff_pair_latch] player 2 READY refinement failed; degrade this kickoff to NORMAL");
-    } else if (!ownKickoffPairLatchScope &&
-               (_ownKickoffPairLatchValid || _ownKickoffPairSampleCount > 0)) {
+        // 正常流程在 SET 首帧锁存；如果进程在 SET 末尾启动，则首次 PLAY
+        // 仍可补锁一次。此后整个开球阶段不再随通信瞬断而改变战术。
+        _ownKickoffPairReadyLatched = liveOwnKickoffPairReady;
+        _ownKickoffPairLatchValid = true;
         RCLCPP_INFO(
             brain->get_logger(),
-            "[kickoff_pair_latch] kickoff ended; clear sampled/latched 2/3 readiness");
+            "[kickoff_pair_latch] 2/3 ready=%d, game_state=%s; hold until kickoff ends",
+            _ownKickoffPairReadyLatched ? 1 : 0, gameState.c_str());
+    } else if (!ownKickoffPairLatchScope && _ownKickoffPairLatchValid) {
+        RCLCPP_INFO(
+            brain->get_logger(),
+            "[kickoff_pair_latch] kickoff ended; clear latched 2/3 readiness");
         _ownKickoffPairLatchValid = false;
         _ownKickoffPairReadyLatched = false;
-        _ownKickoffPairSampleCount = 0;
-        _ownKickoffPlayer2Seen = false;
-        _ownKickoffPlayer3Seen = false;
     }
 
     // 仅我方普通开球使用锁存结果；其他定位球继续实时检查 1、2 号在线状态。
     const bool effectivePairReady = ownKickoffPairLatchScope
-        ? (_ownKickoffPairLatchValid && _ownKickoffPairReadyLatched)
+        ? _ownKickoffPairReadyLatched
         : livePairReady;
     setEntry<bool>("setplay_pair_ready", effectivePairReady);
     tree.tickOnce();
@@ -5237,7 +5191,7 @@ NodeStatus PostOwnKickoffPosition::tick()
     getInput("theta_tolerance", thetaTolerance);
 
     const int playerId = brain->config->playerId;
-    const double targetY = playerId == 2 ? 1.0 : 0.0;
+    const double targetY = playerId == 2 ? 0.5 : 0.0;
     brain->client->moveToPoseOnField3(
         0.0, targetY, 0.0,
         0.8, 0.35,
@@ -5280,14 +5234,6 @@ NodeStatus GoToReadyPosition::tick()
     bool avoidObstacle = false;
 
     if (_lastGameState != gameState && gameState == "READY") {
-        // 新一轮 READY 清除上一轮2号广播的精定位失败；使用新的 cmdId
-        // 广播清零，避免队友继续读取上一轮保存在 tmStatus 中的失败码。
-        if (brain->config->playerId == 2 &&
-            brain->data->tmMyCmd == kKickoffReadyRefineFailedCmd) {
-            brain->data->tmMyCmd = 0;
-            brain->data->tmCmdId += 1;
-            brain->data->tmMyCmdId = brain->data->tmCmdId;
-        }
         _positionLocked = false;
         _lockedTargetValid = false;
         _lockedOdomValid = false;
@@ -5339,8 +5285,8 @@ NodeStatus GoToReadyPosition::tick()
         if (strikerRank == 0) {
             if (isKickoff) {
                 // 我方开球 READY：1号改为原2号的等待站位，面向对方球门。
-                tx = -2.0;
-                ty = -2.0;
+                tx = -1.0;
+                ty = -3.5;
                 ttheta = 0.0;
             } else {
                 tx = -2.3;
@@ -5666,12 +5612,6 @@ NodeStatus GoToReadyPosition::tick()
             if (!_kickoffReadyTargetValid && refineElapsedMs >= SCAN_TIMEOUT_MS) {
                 // 识别不足时不在对方半场的中圈附近继续逗留，转去己方半场
                 // (-1, 0) 安全点；下一帧由上面的 fallback 分支持续导航到位。
-                // 同时广播本轮开球退化，SET/PLAY 后三台机器人统一进入 NORMAL。
-                if (brain->data->tmMyCmd != kKickoffReadyRefineFailedCmd) {
-                    brain->data->tmMyCmd = kKickoffReadyRefineFailedCmd;
-                    brain->data->tmCmdId += 1;
-                    brain->data->tmMyCmdId = brain->data->tmCmdId;
-                }
                 _kickoffReadyFallbackActive = true;
                 _kickoffReadyTargetValid = false;
                 _kickoffReadyStableTicks = 0;

@@ -47,9 +47,6 @@ private:
     // 锁存后不再受比赛中瞬时通信抖动影响，直到本次开球结束才清除。
     bool _ownKickoffPairLatchValid = false;
     bool _ownKickoffPairReadyLatched = false;
-    int _ownKickoffPairSampleCount = 0;
-    bool _ownKickoffPlayer2Seen = false;
-    bool _ownKickoffPlayer3Seen = false;
 };
 
 // ------------------------------- 比赛用 -------------------------------
