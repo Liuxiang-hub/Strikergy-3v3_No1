@@ -655,7 +655,12 @@ void Brain::pubKickMsg() {
             config->fieldDimensions.circleRadius + 1.0;
         const bool ballNearCenterCircle =
             std::hypot(ball_x, ball_y) <= centerCircleBoostRadius;
-        power = ballNearCenterCircle ? 6.0 : (ball_x < 0.0 ? 6.0 : 5.0);
+        const bool ballBeforeX2 = ball_x < 2.0;
+        const bool ballInCentralAttackLane =
+            ball_x < 6.0 && ball_y >= -2.0 && ball_y <= 2.0;
+        power = (ballNearCenterCircle || ballBeforeX2 || ballInCentralAttackLane)
+            ? 6.0
+            : 5.0;
     } else if (dist > 6.0) {
         power = 5.0;
     } else {
