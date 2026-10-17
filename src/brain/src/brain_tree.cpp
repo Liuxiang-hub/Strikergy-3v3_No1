@@ -2331,7 +2331,12 @@ NodeStatus StrikerDecide::tick() {
         return NodeStatus::SUCCESS;
     }
 
-    if (normalOwnerPhase && !keeperRole && !brain->data->tmImLead) {
+    const bool visualKickSessionActive =
+        normalOwnerPhase && lastDecision == "auto_visual_kick" &&
+        brain->data->tmImInVisualKick;
+
+    if (normalOwnerPhase && !keeperRole && !brain->data->tmImLead &&
+        !visualKickSessionActive) {
         // 球位有效但未当选：只能接应，不能落入普通 chase/adjust/kick 分支。
         brain->data->tmImInVisualKick = false;
         hasLastDeltaDir = false;
@@ -2341,10 +2346,10 @@ NodeStatus StrikerDecide::tick() {
         return NodeStatus::SUCCESS;
     }
 
-    if (normalOwnerPhase && brain->data->tmImLead &&
-        lastDecision == "auto_visual_kick" && brain->data->tmImInVisualKick) {
-        // 每帧仍检查角色，但未失去球权时，让已启动的 VisualKick 自己处理
-        // 完成/超时/球位异常，避免入场几何条件的抖动反复中断封装动作。
+    if (visualKickSessionActive) {
+        // Once NORMAL VisualKick has started, transient lead-election changes
+        // must not interrupt the packaged kick action.  Its own completion and
+        // safety conditions remain responsible for ending the session.
         setOutput("decision_out", string("auto_visual_kick"));
         return NodeStatus::SUCCESS;
     }
@@ -3312,10 +3317,10 @@ NodeStatus RLVisionKick::onRunning()
         (maxParallel <= 1 || brain->data->tmMyCost > yieldMyCostMin);
 
     bool ownershipGraceExpired = false;
-    if (goalieKick || setPlayAttackActive) {
-        // 守门员解围不参与普通球员的队内球权选举，不能因为 tmImLead=false
-        // 在 1 秒后中断解围。清除可能遗留的宽限状态，其余 VisualKick
-        // 超时、丢球和姿态安全检查仍继续生效。
+    if (goalieKick || setPlayAttackActive || normalOwnerPhase) {
+        // Keeper/set-play kicks and an already-running NORMAL VisualKick are
+        // not interrupted by transient team ownership-election changes.
+        // Timeout, ball validity and pose safety checks still apply.
         _ownershipLossActive = false;
         _ownershipLossStartTime = rclcpp::Time(0, 0, RCL_ROS_TIME);
     } else {
@@ -3338,9 +3343,6 @@ NodeStatus RLVisionKick::onRunning()
     const bool elapsedEnough = elapsed > minMsecKick;
     if (brain->tree->getEntry<bool>("ball_out")) return beginExit("ball out");
     if (_badPoseConsecutiveCount >= kVisionKickBadPoseMaxTicks) return beginExit("bad ball pose");
-    if (normalOwnerPhase && !brain->data->tmImLead) {
-        return beginExit("lost NORMAL ownership election");
-    }
     if (!setPlayAttackActive && !normalOwnerPhase && teammateExplicitlyLead) {
         return beginExit(format("teammate %d took team ball ownership", explicitLeaderId));
     }
