@@ -92,15 +92,15 @@
                                 _while="gc_real_game_sub_state=='INDIRECT_FREEKICK' &amp;&amp; (gc_is_sub_state_kickoff_side || player_role=='keeper')" />
                             <!-- 我方角球在 v20 恢复比赛后会被映射为 NONE/PLAY，必须在 PLAY 内单独接入。 -->
                             <SubTree ID="CornerKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || (setplay_pair_ready &amp;&amp; !setplay_kick_done))" />
+                                _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; !gc_is_sub_state_kickoff_side" />
                             <SubTree ID="GoalKick" _autoremap="true"
-                                _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || (setplay_pair_ready &amp;&amp; !setplay_kick_done))" />
+                                _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; !gc_is_sub_state_kickoff_side" />
                             <SubTree ID="ThrowIn" _autoremap="true"
-                                _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || (setplay_pair_ready &amp;&amp; !setplay_kick_done))" />
+                                _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; !gc_is_sub_state_kickoff_side" />
                             <SubTree ID="KickoffPlay" _autoremap="true"
                                 _while="gc_kickoff_active &amp;&amp; setplay_pair_ready &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME')" />
                             <SubTree ID="NormalPlay" _autoremap="true"
-                                _while="(!gc_kickoff_active || !setplay_pair_ready) &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME' || (!setplay_pair_ready &amp;&amp; (gc_real_game_sub_state=='CORNER_KICK' || gc_real_game_sub_state=='GOAL_KICK' || gc_real_game_sub_state=='THROW_IN'))) &amp;&amp; !(player_role=='keeper' &amp;&amp; (gc_real_game_sub_state=='DIRECT_FREEKICK' || gc_real_game_sub_state=='INDIRECT_FREEKICK' || gc_real_game_sub_state=='CORNER_KICK' || gc_real_game_sub_state=='GOAL_KICK' || gc_real_game_sub_state=='THROW_IN'))" />
+                                _while="(!gc_kickoff_active || !setplay_pair_ready) &amp;&amp; (gc_real_game_sub_state=='NONE' || gc_real_game_sub_state=='OVERTIME' || (gc_is_sub_state_kickoff_side &amp;&amp; (gc_real_game_sub_state=='CORNER_KICK' || gc_real_game_sub_state=='GOAL_KICK' || gc_real_game_sub_state=='THROW_IN'))) &amp;&amp; !(player_role=='keeper' &amp;&amp; (gc_real_game_sub_state=='DIRECT_FREEKICK' || gc_real_game_sub_state=='INDIRECT_FREEKICK' || (!gc_is_sub_state_kickoff_side &amp;&amp; (gc_real_game_sub_state=='CORNER_KICK' || gc_real_game_sub_state=='GOAL_KICK' || gc_real_game_sub_state=='THROW_IN'))))" />
                         </ReactiveSequence>
 
                         <ReactiveSequence _while="gc_game_state=='END'" name="比赛结束">
@@ -119,11 +119,13 @@
                         <SubTree ID="IndirectFreeKick" _autoremap="true"
                             _while="gc_real_game_sub_state=='INDIRECT_FREEKICK'" />
                         <SubTree ID="CornerKick" _autoremap="true"
-                            _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || setplay_pair_ready)" />
+                            _while="gc_real_game_sub_state=='CORNER_KICK' &amp;&amp; !gc_is_sub_state_kickoff_side" />
                         <SubTree ID="GoalKick" _autoremap="true"
-                            _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || setplay_pair_ready)" />
+                            _while="gc_real_game_sub_state=='GOAL_KICK' &amp;&amp; !gc_is_sub_state_kickoff_side" />
                         <SubTree ID="ThrowIn" _autoremap="true"
-                            _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; (player_role=='keeper' || !gc_is_sub_state_kickoff_side || setplay_pair_ready)" />
+                            _while="gc_real_game_sub_state=='THROW_IN' &amp;&amp; !gc_is_sub_state_kickoff_side" />
+                        <SubTree ID="NormalPlay" _autoremap="true"
+                            _while="gc_is_sub_state_kickoff_side &amp;&amp; (gc_real_game_sub_state=='CORNER_KICK' || gc_real_game_sub_state=='GOAL_KICK' || gc_real_game_sub_state=='THROW_IN')" />
                         <SubTree ID="UnknownSetPlay" _autoremap="true"
                             _while="gc_real_game_sub_state=='UNKNOWN_SET_PLAY'" />
                     </ReactiveSequence>

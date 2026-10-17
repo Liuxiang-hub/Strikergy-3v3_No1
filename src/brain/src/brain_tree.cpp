@@ -24,6 +24,18 @@ constexpr double kVisionKickHeadScanPitch = 0.4;
 constexpr double kVisionKickHeadDownPitch = 0.7;
 constexpr double kVisionKickHeadCommandIntervalMs = 100.0;
 
+bool ownStructuredSetPlayUsesNormalPlay(Brain *brain)
+{
+    if (!brain->tree->getEntry<bool>("gc_is_sub_state_kickoff_side")) {
+        return false;
+    }
+    const string subState =
+        brain->tree->getEntry<string>("gc_real_game_sub_state");
+    return subState == "CORNER_KICK" ||
+        subState == "GOAL_KICK" ||
+        subState == "THROW_IN";
+}
+
 // 与 handleCooperation 的 NORMAL 选举阶段保持一致；定位球和守门员不受影响。
 bool normalFieldPlayerOwnershipPhase(Brain *brain)
 {
@@ -38,7 +50,8 @@ bool normalFieldPlayerOwnershipPhase(Brain *brain)
           !brain->tree->getEntry<bool>("setplay_pair_ready")) ||
          ownKickoffNormal) &&
         !brain->tree->getEntry<bool>("setplay_attack_active") &&
-        (subState == "NONE" || subState == "OVERTIME");
+        (subState == "NONE" || subState == "OVERTIME" ||
+         ownStructuredSetPlayUsesNormalPlay(brain));
 }
 
 double visualKickRealBallHoldMs(Brain *brain)
@@ -2150,7 +2163,8 @@ NodeStatus CalcKickDir::tick()
         (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
          !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
         (brain->data->realGameSubState == "NONE" ||
-         brain->data->realGameSubState == "OVERTIME");
+         brain->data->realGameSubState == "OVERTIME" ||
+         ownStructuredSetPlayUsesNormalPlay(brain));
     const double centerCircleForwardAimRadius = fd.circleRadius + 2.0;
     const bool ballInsideExpandedCenterCircle =
         std::hypot(bPos.x, bPos.y) <= centerCircleForwardAimRadius;
@@ -3152,7 +3166,8 @@ NodeStatus RLVisionKick::onRunning()
                     (!brain->tree->getEntry<bool>("gc_kickoff_active") ||
                      !brain->tree->getEntry<bool>("setplay_pair_ready")) &&
                     (brain->data->realGameSubState == "NONE" ||
-                     brain->data->realGameSubState == "OVERTIME") &&
+                     brain->data->realGameSubState == "OVERTIME" ||
+                     ownStructuredSetPlayUsesNormalPlay(brain)) &&
                     !goalieKick;
                 // NORMAL 正常拼抢统一使用 kV2。力度仍按原有区域规则计算，
                 // 此处只固定 VisualKick 的动作版本，不改变力度和进入条件。
