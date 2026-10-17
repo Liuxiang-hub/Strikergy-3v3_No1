@@ -945,7 +945,7 @@ void Brain::handleCooperation() {
 
 
     static rclcpp::Time lastTmBallPosTime = get_clock()->now();
-    const double TM_BALL_TIMEOUT = 1000.; 
+    const double TM_BALL_TIMEOUT = 1500.;
     const double RANGE_THRESHOLD = config->tmBallDistThreshold; 
     int trustedTMIdx = -1;
     double minRange = 1e6;
@@ -1459,7 +1459,7 @@ void Brain::updateBallMemory()
         const double stepMs = std::max(1.0, get_parameter("ball_predictor.step_interval").as_double());
         const double ageMs = msecsSince(data->ballPosPredictTime);
         const double horizonMs = stepMs * static_cast<double>(data->predictedBallPos.size() - 1);
-        if (std::isfinite(ageMs) && ageMs >= 0.0 && ageMs <= std::min(1000.0, horizonMs)) {
+        if (std::isfinite(ageMs) && ageMs >= 0.0 && ageMs <= std::min(1500.0, horizonMs)) {
             const int idx = std::clamp(
                 static_cast<int>(ageMs / stepMs),
                 0,
